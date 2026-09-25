@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Codex Pocket</string>
+    <string name="title_activity_main">Codex Pocket</string>
+    <string name="package_name">studio.codexpocket.mobile</string>
+    <string name="custom_url_scheme">studio.codexpocket.mobile</string>
+</resources>

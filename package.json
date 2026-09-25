@@ -1,0 +1,34 @@
+{
+  "name": "codex-pocket",
+  "version": "1.2.1",
+  "private": true,
+  "description": "A mobile Codex relay client packaged with Capacitor.",
+  "type": "module",
+  "scripts": {
+    "dev": "node server.mjs",
+    "bridge": "node bridge.mjs",
+    "desktop": "node desktop.mjs",
+    "build": "node -e \"import('fs').then(({cpSync,mkdirSync,existsSync})=>{if(!existsSync('dist'))mkdirSync('dist');cpSync('www','dist',{recursive:true})})\"",
+    "cap:add:android": "npx cap add android",
+    "cap:add:ios": "npx cap add ios",
+    "cap:sync": "npx cap sync"
+  },
+  "dependencies": {
+    "@capacitor/android": "^6.2.2",
+    "@capacitor/core": "^6.2.1"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^6.2.1",
+    "playwright-core": "^1.63.0",
+    "typescript": "^5.6.3"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yunqing-yuan/codex-pocket.git"
+  },
+  "bugs": {
+    "url": "https://github.com/yunqing-yuan/codex-pocket/issues"
+  },
+  "homepage": "https://github.com/yunqing-yuan/codex-pocket#readme"
+}

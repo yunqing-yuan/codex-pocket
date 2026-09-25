@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="ground" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#23554e"/><stop offset=".6" stop-color="#112e2b"/><stop offset="1" stop-color="#091d21"/></linearGradient>
+    <radialGradient id="glow" cx=".23" cy=".15" r=".85"><stop stop-color="#8eeac8" stop-opacity=".21"/><stop offset="1" stop-color="#8eeac8" stop-opacity="0"/></radialGradient>
+    <linearGradient id="jade" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#d3f8e6"/><stop offset=".48" stop-color="#96dbc1"/><stop offset="1" stop-color="#519b91"/></linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="116" fill="url(#ground)"/>
+  <rect width="512" height="512" rx="116" fill="url(#glow)"/>
+  <rect x="16" y="16" width="480" height="480" rx="102" fill="none" stroke="#c2f7df" stroke-opacity=".1"/>
+  <g transform="translate(256 256) scale(1.22) translate(-256 -256)">
+    <circle cx="256" cy="256" r="137" fill="none" stroke="#b0e3d3" stroke-opacity=".12" stroke-width="1.5"/>
+    <path d="M316 172a104 104 0 1 0 15 151" fill="none" stroke="url(#jade)" stroke-width="27" stroke-linecap="round"/>
+    <path d="m234 218 43 38-43 38" fill="none" stroke="#fff7df" stroke-width="22" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="m350 164 6 18 18 6-18 6-6 18-6-18-18-6 18-6Z" fill="#e9c58b"/>
+    <circle cx="352" cy="272" r="5" fill="#d5ecdc" fill-opacity=".7"/>
+  </g>
+</svg>

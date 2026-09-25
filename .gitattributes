@@ -1,0 +1,17 @@
+* text=auto eol=lf
+*.md text eol=lf
+*.js text eol=lf
+*.mjs text eol=lf
+*.ts text eol=lf
+*.json text eol=lf
+*.html text eol=lf
+*.css text eol=lf
+*.java text eol=lf
+*.gradle text eol=lf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+gradlew text eol=lf
+gradlew.bat text eol=crlf
+*.png binary
+*.jar binary
+docs/licenses/* -whitespace
