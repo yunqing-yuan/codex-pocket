@@ -48,6 +48,8 @@ If connecting only works with Windows Firewall disabled, re-enable it, mark your
 
 ## Privacy and transport
 
+For different networks, run `Setup-Remote.cmd` from the updated bridge bundle. It guides Tailscale installation/sign-in, starts the bridge, configures an exception limited to its Tailscale interface/address and TCP 15731, and displays pairing details. Install Tailscale on Android and join the same private network. User sign-in and OS permission prompts are required. `Remove-Remote.cmd` removes only the helper's firewall rule. See [remote setup](docs/REMOTE.md); campus-network connectivity is not guaranteed or field-verified.
+
 The phone communicates with your bridge, which communicates locally with Codex. Model keys remain in the computer's provider configuration. The app stores bridge credentials using Android Keystore and AES-GCM; app backup is disabled. Conversations and attachments sent to your model provider remain subject to that provider's policies.
 
 The bridge listens on port `15731`; the pairing administration page is loopback-only on `127.0.0.1:15732`. **Default transport is HTTP, not encrypted. Use a trusted LAN or a private VPN; do not expose the bridge directly to the public internet.** A private VPN such as Tailscale can provide cross-network connectivity and must be configured separately.

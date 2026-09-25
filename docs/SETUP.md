@@ -70,6 +70,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Fix-Firewall.ps1 -Remo
 
 ## 异地连接
 
+推荐使用新版电脑桥中的 **`Setup-Remote.cmd`** 配置向导。手机首次安装 Tailscale、登录同一私人网络并允许 VPN，电脑按向导完成安装、登录和端口配置。详见 [异地连接指南](REMOTE.md)。以下为手动配置方式：
+
 1. 自行在手机、电脑安装并配置 Tailscale 等私人 VPN。
 2. 确认两台设备属于你允许互访的私人网络，防火墙允许桥端口。
 3. 把 App 地址改为电脑 VPN 地址并保留 `:15731`，按需重新配对。
