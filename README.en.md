@@ -23,7 +23,7 @@ This is an unofficial community project, not affiliated with or endorsed by Open
 ## Features
 
 - A conversation-first interface with history and search in a side drawer.
-- Messages from both devices in the same thread, delegated to the running desktop client.
+- Messages in the same thread, handled by an existing desktop owner or the background engine.
 - Synchronized command, file and permission approvals; task interruption.
 - Up to 6 attachments per message, 20 MB each. Supported images become image inputs; documents are saved on the computer for its tools to read.
 - Available models, reasoning levels and existing project folders read from the computer.
@@ -40,7 +40,9 @@ Requirements: **Android 8+**, **Windows**, **Node.js 20/22 LTS**, and a working 
 4. Run `Start-Pocket.cmd`. A local pairing page displays the computer address and a six-digit code.
 5. On the same trusted network, open the app drawer → settings (设置与配对), enter the address and code, and connect.
 
-Keep the computer awake and both Codex and the bridge running. Allow Node.js through Windows Firewall on the appropriate private network. To share the app, distribute the APK and the complete bridge ZIP; a launcher script alone is insufficient. Each user configures their own provider and pairs with their own computer. Never share an existing `runtime/` folder.
+Keep the computer awake, signed in and the bridge running; the screen may be locked. The Codex desktop window can remain closed. After pairing, run `Enable-Background.cmd` to start the bridge automatically at Windows sign-in without opening chat or pairing windows. `Disable-Background.cmd` removes automatic startup. To share the app, distribute the APK and the complete bridge ZIP. Each user configures their own provider and computer. Never share an existing `runtime/` folder.
+
+Version 1.3 adds chat archive/restore, hides structured reasoning items, and provides previews and Android sharing for files linked or modified within the conversation's project. HTML previews isolate content and disable external networking; complex modules and server-dependent sites may not work. Background turns release ownership on completion so the desktop can resume the same thread afterward. Existing desktop owners receive messages through IPC. Pocket never automatically opens or focuses a desktop chat; an already-open conversation may still display synchronized content, so lock your screen for privacy.
 
 If connecting only works with Windows Firewall disabled, re-enable it, mark your own trusted Wi-Fi / phone hotspot as a **Private** network, and right-click `Fix-Firewall.cmd` → **Run as administrator**. The helper allows TCP 15731 only for the bridge's Node.js executable, Private networks and the local subnet. It reports existing Node.js block rules, which override allow rules. It does not change those blocks or create VPN rules. To remove its exception, run `Fix-Firewall.ps1 -Remove` from an elevated PowerShell.
 
@@ -57,7 +59,7 @@ The bridge stores its access token in `runtime/pairing.json` and attachments in 
 - Android 8 / API 26 minimum, with a working System WebView. No iOS package.
 - Windows is the supported distribution path. Full macOS/Linux workflows are unverified.
 - Development used Codex Windows `26.917.9434.0`. Same-thread sending uses an internal desktop IPC protocol that may change with desktop updates.
-- The `1.2.1` APK uses debug signing and is a preview, not a store release.
+- The `1.3.0` APK uses debug signing and is a preview, not a store release.
 - No claim of exhaustive device testing or an independent security audit. Cross-network device usage has not been comprehensively validated.
 - No built-in document parser, background push notifications, automatic public tunnel, or per-user access isolation.
 

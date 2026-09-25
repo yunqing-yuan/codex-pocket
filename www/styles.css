@@ -275,4 +275,20 @@ input,textarea{outline:none;min-width:0}
 .sheet-symbol{display:grid;place-items:center;background:var(--user);color:var(--accent);border-radius:18px;width:55px;height:55px;margin:7px 0 18px}
 .error-text{color:var(--danger)}
 @media(max-width:370px){.model-chip>span{max-width:105px}.model-chip small{font-size:8px}.composer-tools{gap:3px}.bottom-sheet{padding-left:15px;padding-right:15px}}
+.history-tabs{display:flex;gap:6px;margin:6px 0 12px;padding:4px;background:var(--user);border-radius:13px}
+.history-tabs button{flex:1;min-height:40px;border-radius:10px;font-size:12px;color:var(--muted)}
+.history-tabs button[aria-pressed=true]{background:var(--panel);color:var(--accent);box-shadow:0 2px 8px #00000008}
+.history-entry{display:flex;align-items:center;gap:3px}.history-entry .history-row{flex:1;min-width:0}
+.history-archive{flex-shrink:0;min-width:44px;min-height:44px;padding:5px;font-size:11px;color:var(--muted);border-radius:10px}
+.history-archive:active{background:var(--user)}
+.artifact-preview{position:fixed;inset:0;z-index:100;height:var(--view-height,100dvh);display:flex;flex-direction:column;background:var(--bg);color:var(--text);padding-top:env(safe-area-inset-top)}
+.artifact-preview>header{display:flex;align-items:center;gap:8px;padding:10px 12px;border-bottom:1px solid var(--line);flex-shrink:0}
+.artifact-preview>header strong{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px}
+.artifact-preview>header .button{font-size:11px;padding:9px;min-height:40px}
+.preview-content{flex:1;min-height:0;overflow:auto;display:flex;flex-direction:column;align-items:stretch;padding-bottom:env(safe-area-inset-bottom)}
+.preview-content iframe{flex:1;min-height:70%;width:100%;border:0;background:#fff}
+.preview-content>img{display:block;max-width:100%;height:auto;object-fit:contain;margin:auto}
+.preview-content>pre{white-space:pre-wrap;overflow-wrap:anywhere;font:12px/1.7 ui-monospace,monospace;padding:18px}
+.preview-content>video,.preview-content>audio{max-width:100%;margin:auto}
+.preview-note{font-size:12px;line-height:1.8;padding:12px 18px;color:var(--muted);margin:0}
 @media(max-height:530px){.context-row{padding-bottom:1px;min-height:16px}.context-row button{min-height:24px}.attachment-tray{max-height:60px}.attachment-chip>img{height:28px;width:28px}.bottom-sheet{max-height:94%}}

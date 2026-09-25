@@ -16,6 +16,7 @@ import { EventEmitter } from "node:events";
 import { homedir } from "node:os";
 import { MAX_FILE_BYTES, saveUpload, messageInput, resolveUploads } from "./bridge/uploads.mjs";
 import { DesktopIpc } from './bridge/desktop-ipc.mjs';
+import { listArtifacts, readArtifact } from './bridge/artifacts.mjs';
 import {
   approvalDecision,
   mapItems,
@@ -111,6 +112,7 @@ class CodexBridge extends EventEmitter {
     this.initialized = null;
     this.closed = false;
     this.operations = new Map();
+    this.threadOperations = new Map();
     this.capabilityCache = null;
     this.desktop = new DesktopIpc();
     this.desktop.on('state', (id, state) => this.updateDesktopState(id, state));
@@ -198,7 +200,7 @@ class CodexBridge extends EventEmitter {
         this.activeTurns.delete(String(threadId));
         for (const [key, entry] of this.approvals)
           if (entry.params.threadId === threadId) this.approvals.delete(key);
-        if (this.ownedThreads.has(threadId)) this.releaseThread(threadId).catch(() => {});
+        if (this.ownedThreads.has(threadId)) this.withThread(threadId, () => this.releaseThread(threadId)).catch(() => {});
       }
     }
     if (message.method)
@@ -284,7 +286,7 @@ class CodexBridge extends EventEmitter {
     return new Promise((resolveRpc, rejectRpc) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
-        rejectRpc(new Error(`Codex RPC timeout: ${method}`));
+        rejectRpc(Object.assign(new Error(`等待电脑处理超时：${method}。请先同步消息，避免重复发送。`), { code: 'bridge_request_timeout' }));
       }, timeoutMs);
       this.pending.set(id, {
         resolve: (value) => {
@@ -326,8 +328,9 @@ class CodexBridge extends EventEmitter {
       pid: this.child.pid,
       initialized: true,
       executable: basename(this.executable),
-      version: '1.2.1',
+      version: '1.3.0',
       sameThreadSending: true,
+      backgroundExecution: true,
     };
   }
 
@@ -338,15 +341,12 @@ class CodexBridge extends EventEmitter {
       cursor: query.cursor || null,
       searchTerm: query.searchTerm || null,
       cwd: query.cwd ? [query.cwd] : null,
-      archived:
-        query.archived == null
-          ? null
-          : query.archived === "true" || query.archived === "1",
+      archived: query.archived === "true" || query.archived === "1",
       sortDirection: query.sortDirection || null,
     });
     const rows = result?.data || result?.threads || [];
     return {
-      threads: rows.map((row) => normalizeThread(row, this.ownedThreads)),
+      threads: rows.map((row) => normalizeThread({ ...row, archived: query.archived === 'true' || query.archived === '1' }, this.ownedThreads)),
       nextCursor: result?.nextCursor ?? null,
     };
   }
@@ -429,9 +429,7 @@ class CodexBridge extends EventEmitter {
         ...raw,
         id,
         messages: [...mapped.messages, ...turnErrors].sort((a, b) => a.time - b.time),
-        status:
-          raw.status ||
-          (this.activeTurns.has(id) ? { type: "active" } : "idle"),
+        status: this.activeTurns.has(id) ? { type: "active" } : raw.status || 'idle',
       },
       this.ownedThreads,
     );
@@ -493,7 +491,7 @@ class CodexBridge extends EventEmitter {
     const promise = operation().catch(error => {
       // An IPC timeout may arrive after the desktop accepted the message. Keep
       // the same request outcome cached instead of silently sending it twice.
-      if (!['desktop_request_timeout', 'desktop_connection_lost'].includes(error.code)) this.operations.delete(key);
+      if (!['desktop_request_timeout', 'desktop_connection_lost', 'bridge_request_timeout'].includes(error.code)) this.operations.delete(key);
       throw error;
     });
     this.operations.set(key, promise);
@@ -531,18 +529,32 @@ class CodexBridge extends EventEmitter {
       const name = options.title.trim().replace(/\s+/g, ' ').slice(0, 48);
       try { await this.rpc('thread/name/set', { threadId: id, name }); raw.name = name; } catch {}
     }
-    await this.releaseThread(id);
+    // Codex defers the rollout until the first real user message. Keep the
+    // empty thread loaded; unsubscribing here destroys its only live writer.
     return normalizeThread({ ...raw, id, model: result.model || model, reasoningEffort: result.reasoningEffort || effort, status: "idle", messages: [] }, this.ownedThreads);
   }
 
-  async sendMessage(id, text, options = {}) {
+  withThread(id, operation) {
+    const previous = this.threadOperations.get(id) || Promise.resolve();
+    const next = previous.catch(() => {}).then(operation);
+    this.threadOperations.set(id, next);
+    const clean = () => { if (this.threadOperations.get(id) === next) this.threadOperations.delete(id); };
+    next.then(clean, clean);
+    return next;
+  }
+
+  sendMessage(id, text, options = {}) {
+    return this.withThread(id, () => this.sendToThread(id, text, options));
+  }
+
+  async sendToThread(id, text, options) {
     await this.ensureInitialized();
     const raw = (await this.rpc('thread/read', { threadId: id, includeTurns: false })).thread;
     const thread = normalizeThread(raw, this.ownedThreads);
-    await this.releaseThread(id);
-    if (this.activeTurns.has(id)) throw Object.assign(new Error('旧版手机任务仍在运行，请等它完成后继续同一对话'), { statusCode: 409, code: 'thread_active' });
-    const owner = await this.desktop.acquire(id);
-    const live = await this.desktop.waitState(id);
+    if (this.activeTurns.has(id)) throw Object.assign(new Error('这条对话正在生成，请等待完成或先停止任务'), { statusCode: 409, code: 'thread_active' });
+    // Discover an existing owner without opening or focusing a desktop window.
+    const owner = this.ownedThreads.has(id) ? null : await this.desktop.discover(id).catch(() => null);
+    const live = owner ? await this.desktop.waitState(id) : null;
     if (live) {
       thread.model = live.latestModel || thread.model;
       thread.reasoningEffort = live.latestThreadSettings?.effort ?? live.latestReasoningEffort ?? live.latestCollaborationMode?.settings?.reasoning_effort ?? thread.reasoningEffort;
@@ -552,8 +564,50 @@ class CodexBridge extends EventEmitter {
     const catalog = (await this.capabilities()).models.find(m => m.id === modelOptions.model);
     if (files.some(f => f.image) && catalog && !catalog.inputModalities.includes('image')) throw Object.assign(new Error('当前模型不支持图片，请切换支持图片的模型'), { statusCode: 400 });
     const input = messageInput(runtimeDir, text, options.attachments || []);
-    const result = await this.desktop.send(id, input, { ...(options.model ? modelOptions : {}), requestId: options.requestId }, owner);
-    return { accepted: true, turnId: result?.result?.turn?.id || null, threadId: id, transport: 'desktop' };
+    if (owner) {
+      const result = await this.desktop.send(id, input, { ...(options.model || options.effort ? modelOptions : {}), requestId: options.requestId }, owner);
+      return { accepted: true, turnId: result?.result?.turn?.id || null, threadId: id, transport: 'desktop' };
+    }
+    if (!this.ownedThreads.has(id)) {
+      if (raw?.path && !existsSync(raw.path)) throw Object.assign(new Error('这条旧会话的记录文件不存在。请新建对话后重新发送；当前草稿和附件已保留。'), { statusCode: 409, code: 'thread_storage_missing' });
+      try {
+        await this.rpc('thread/resume', { threadId: id, excludeTurns: true });
+      } catch (error) {
+        if (/active writer|already.*loaded|already.*running/i.test(error.message)) {
+          const retryOwner = await this.desktop.discover(id).catch(() => null);
+          if (retryOwner) {
+            const result = await this.desktop.send(id, input, { ...modelOptions, requestId: options.requestId }, retryOwner);
+            return { accepted: true, turnId: result?.result?.turn?.id || null, threadId: id, transport: 'desktop' };
+          }
+          throw Object.assign(new Error('该会话正由另一进程处理，请等它结束后重试。不会自动弹出电脑窗口。'), { statusCode: 409, code: 'thread_active' });
+        }
+        throw error;
+      }
+      this.ownedThreads.add(id);
+    }
+    this.activeTurns.set(id, 'pending');
+    try {
+      const result = await this.rpc('turn/start', { threadId: id, input, ...modelOptions, ...(options.requestId ? { clientUserMessageId: options.requestId } : {}) });
+      if (this.activeTurns.get(id) === 'pending') this.activeTurns.set(id, result?.turn?.id || 'pending');
+      return { accepted: true, turnId: result?.turn?.id || null, threadId: id, transport: 'bridge' };
+    } catch (error) {
+      if (error.code !== 'bridge_request_timeout') this.activeTurns.delete(id);
+      throw error;
+    }
+  }
+
+  archiveThread(id, archived) {
+    return this.withThread(id, async () => {
+      const thread = await this.readThread(id);
+      if (this.activeTurns.has(id) || ['active', 'inProgress', 'running', 'busy'].includes(thread.status) || [...this.approvals.values()].some(a => a.params.threadId === id)) {
+        throw Object.assign(new Error('请先完成或停止任务、处理待审批操作，再归档会话'), { statusCode: 409 });
+      }
+      await this.releaseThread(id);
+      await this.rpc(archived ? 'thread/archive' : 'thread/unarchive', { threadId: id });
+      await this.desktop.notifyArchived(id, archived);
+      this.desktop.forget(id);
+      return { ok: true, archived };
+    });
   }
 
   async interrupt(id) {
@@ -562,6 +616,7 @@ class CodexBridge extends EventEmitter {
     if (!turnId) {
       return this.desktop.call(id, 'thread-follower-interrupt-turn', { mode: 'user-stop', expectedTurnId: null });
     }
+    if (turnId === 'pending') throw Object.assign(new Error('任务仍在确认中，请稍后同步再停止'), { statusCode: 409 });
     return {
       ok: true,
       ...(await this.rpc("turn/interrupt", { threadId: id, turnId })),
@@ -792,6 +847,17 @@ export function createBridgeServer({
       ) {
         send(res, req, 200, await activeBridge.readThread(route[1]));
         return;
+      }
+      if (route[0] === 'threads' && route[1] && route.length === 3 && route[2] === 'archive' && req.method === 'POST') {
+        const payload = await readJsonBody(req);
+        if (typeof payload.archived !== 'boolean') throw Object.assign(new Error('archived must be boolean'), { statusCode: 400 });
+        send(res, req, 200, await activeBridge.archiveThread(route[1], payload.archived)); return;
+      }
+      if (route[0] === 'threads' && route[1] && route.length === 3 && route[2] === 'artifacts' && req.method === 'GET') {
+        send(res, req, 200, { artifacts: await listArtifacts(await activeBridge.readThread(route[1])) }); return;
+      }
+      if (route[0] === 'threads' && route[1] && route.length === 4 && route[2] === 'artifacts' && req.method === 'GET') {
+        send(res, req, 200, await readArtifact(await activeBridge.readThread(route[1]), route[3])); return;
       }
       if (
         req.method === "POST" &&

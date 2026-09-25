@@ -87,6 +87,10 @@ const state = {
   screen: "threads",
   drawer: false,
   search: "",
+  historyArchived: false,
+  artifacts: [],
+  artifactError: '',
+  artifactsLoading: false,
   selectedId: ui.selectedId || "",
   syncing: false,
   busy: false,
@@ -218,7 +222,7 @@ function normalizeMessage(raw = {}) {
   };
 }
 function normalizeThread(raw = {}) {
-  const messages = (raw.messages || raw.items || raw.history || []).map(
+  const messages = (raw.messages || raw.items || raw.history || []).filter(m => !m.reasoning && m.rawType !== 'reasoning' && m.type !== 'reasoning').map(
     normalizeMessage,
   );
   const id = raw.id || raw.threadId || raw.thread_id;
@@ -239,6 +243,7 @@ function normalizeThread(raw = {}) {
     reasoningEffort: raw.reasoningEffort || null,
     projectId: raw.projectId || null,
     forkedFromId: raw.forkedFromId || null,
+    archived: Boolean(raw.archived),
     messages,
   };
 }
@@ -301,9 +306,9 @@ class HttpAdapter {
   health() {
     return this.request("/health");
   }
-  async listThreads() {
+  async listThreads(archived = false) {
     let cursor = null; const rows = [];
-    do { const page = await this.request('/threads?limit=200' + (cursor ? '&cursor=' + encodeURIComponent(cursor) : '')); rows.push(...extractRows(page, 'threads')); cursor = page.nextCursor; } while(cursor && rows.length < 1000);
+    do { const page = await this.request('/threads?limit=200&archived=' + archived + (cursor ? '&cursor=' + encodeURIComponent(cursor) : '')); rows.push(...extractRows(page, 'threads')); cursor = page.nextCursor; } while(cursor && rows.length < 1000);
     return rows.map(normalizeThread);
   }
   async getThread(id) {
@@ -326,6 +331,9 @@ class HttpAdapter {
     });
   }
   capabilities() { return this.request('/capabilities'); }
+  archive(id, archived) { return this.request(`/threads/${encodeURIComponent(id)}/archive`, { method: 'POST', body: JSON.stringify({ archived }) }); }
+  artifacts(id) { return this.request(`/threads/${encodeURIComponent(id)}/artifacts`); }
+  artifact(id, fileId) { return this.request(`/threads/${encodeURIComponent(id)}/artifacts/${encodeURIComponent(fileId)}`); }
   upload(file) { return this.request('/uploads', { method: 'POST', body: JSON.stringify(file), timeoutMs: 90000 }); }
   async listApprovals() {
     return extractRows(await this.request("/approvals"), "approvals");
@@ -470,13 +478,13 @@ function historyGroup(time) {
 }
 function renderHistory() {
   const query = state.search.trim().toLocaleLowerCase();
-  const rows = state.threads.filter(t => !query || (t.title + ' ' + t.summary).toLocaleLowerCase().includes(query)).sort((a,b) => b.updatedAt - a.updatedAt);
+  const rows = state.threads.filter(t => Boolean(t.archived) === state.historyArchived && (!query || (t.title + ' ' + t.summary).toLocaleLowerCase().includes(query))).sort((a,b) => b.updatedAt - a.updatedAt);
   let group = '';
   return rows.map(t => {
     const next = historyGroup(t.updatedAt), label = group !== next ? `<h3>${next}</h3>` : '';
     group = next;
     const pending = state.approvals.some(a => a.threadId === t.id && a.status === 'pending') || t.messages.some(m => m.approval?.status === 'pending');
-    return `${label}<button class="history-row ${t.id === state.selectedId ? 'selected' : ''}" data-thread="${escapeHtml(t.id)}" aria-current="${t.id === state.selectedId}"><span>${escapeHtml(t.title)}</span>${pending ? '<i class="pending-mark" aria-label="待审批"></i>' : ''}</button>`;
+    return `${label}<div class="history-entry"><button class="history-row ${t.id === state.selectedId ? 'selected' : ''}" data-thread="${escapeHtml(t.id)}" aria-current="${t.id === state.selectedId}"><span>${escapeHtml(t.title)}</span>${pending ? '<i class="pending-mark" aria-label="待审批"></i>' : ''}</button><button class="history-archive" data-archive="${escapeHtml(t.id)}" aria-label="${state.historyArchived ? '恢复' : '归档'} ${escapeHtml(t.title)}" ${state.busy ? 'disabled' : ''}>${state.historyArchived ? '恢复' : '归档'}</button></div>`;
   }).join('') || `<div class="history-empty">${query ? '没有找到匹配的对话' : '对话会留在这里，随时继续。'}</div>`;
 }
 function renderSettingsForm() {
@@ -515,8 +523,8 @@ function renderComposerExtras(main) {
   const error = state.sendError?.id === state.selectedId ? state.sendError : null;
   const errorBox = main.querySelector('.send-error');
   errorBox.hidden = !error;
-  if (error) errorBox.innerHTML = `<span>${escapeHtml(error.message)}</span><button type="button" data-retry-send ${state.busy ? 'disabled' : ''}>重试</button>`;
-  main.querySelector('.composer-foot').textContent = state.busy ? state.sendPhase || '正在发送…' : thread?.status === 'active' ? 'Codex 正在处理，可发送补充消息' : '与你的灵感，保持连接';
+  if (error) errorBox.innerHTML = `<span>${escapeHtml(error.message)}</span><button type="button" ${error.code === 'thread_storage_missing' ? 'data-recover-draft' : 'data-retry-send'} ${state.busy ? 'disabled' : ''}>${error.code === 'thread_storage_missing' ? '带入新对话' : '重试'}</button>`;
+  main.querySelector('.composer-foot').textContent = state.busy ? state.sendPhase || '正在发送…' : thread?.archived ? '已归档 · 可在对话选项中恢复' : thread?.status === 'active' ? 'Codex 正在处理，可查看结果或停止任务' : '与你的灵感，保持连接';
 }
 async function loadCapabilities() {
   if (!state.config.baseUrl || state.config.mode === 'demo') return;
@@ -539,6 +547,15 @@ async function openSheet(kind) {
     if (state.selectedId !== threadId || state.sheet !== kind || state.sheetThreadId !== threadId) return;
     render();
   }
+  if (kind === 'artifacts') {
+    state.artifacts = []; state.artifactError = ''; state.artifactsLoading = true; render();
+    try {
+      const result = state.config.mode === 'demo' ? { artifacts: [] } : await adapter().artifacts(threadId);
+      if (state.sheet !== kind || state.sheetThreadId !== threadId) return;
+      state.artifacts = result.artifacts || [];
+    } catch (error) { if (state.sheetThreadId === threadId) state.artifactError = error.message; }
+    finally { if (state.sheet === kind && state.sheetThreadId === threadId) { state.artifactsLoading = false; render(); } }
+  }
   document.querySelector('.bottom-sheet [data-close-sheet]')?.focus({ preventScroll: true });
 }
 function closeSheet() { state.sheet = ''; state.sheetThreadId = null; render(); }
@@ -558,6 +575,12 @@ function renderSheet() {
     title = '模型与思考';
     const follow = !state.selections[state.selectedId]?.model;
     body = `<p class="sheet-note">${state.selectedId ? '跟随当前会话的模型和推理强度。手动选择后，从下一条消息生效。' : '默认沿用电脑配置。手动选择仅应用于这条新对话。'}</p><button class="choice-row ${follow ? 'chosen' : ''}" data-follow-model><span>跟随${state.selectedId ? '当前会话' : '电脑配置'}<small>${escapeHtml(options.model || '正在读取…')}</small></span>${follow ? icon('check') : ''}</button><h3>可用模型</h3><div class="model-options">${models.map(m => `<button class="choice-row ${m.id === options.model ? 'chosen' : ''}" data-choose-model="${escapeHtml(m.id)}"><span>${escapeHtml(m.name)}<small>${m.inputModalities.includes('image') ? '支持图片与文字' : '文字模型'}</small></span>${m.id === options.model ? icon('check') : ''}</button>`).join('')}</div><h3>推理强度</h3><div class="effort-options">${(selected?.efforts || []).map(e => `<button class="effort-chip ${e === options.effort ? 'chosen' : ''}" data-choose-effort="${escapeHtml(e)}" aria-pressed="${e === options.effort}">${escapeHtml(effortNames[e] || e)}</button>`).join('')}</div>${state.capabilityError ? `<p class="sheet-note error-text">${escapeHtml(state.capabilityError)}</p>` : ''}<button class="button primary sheet-done" data-close-sheet>完成</button>`;
+  } else if (state.sheet === 'artifacts') {
+    title = '这条对话的作品';
+    body = `<p class="sheet-note">查看回复中链接的文件和修改的文件。HTML 可在 App 内预览，也可分享原文件。</p>${state.artifactsLoading ? '<p class="sheet-note">正在读取作品…</p>' : state.artifacts.map(f => `<button class="choice-row" data-artifact="${escapeHtml(f.id)}" ${f.available ? '' : 'disabled'}><span>${icon(f.mime.startsWith('image/') ? 'image' : 'folder')} ${escapeHtml(f.name)}<small>${escapeHtml(f.relativePath)} · ${Math.ceil(f.size / 1024)} KB${f.available ? '' : ' · 超过 20 MB'}</small></span>${icon('chevron')}</button>`).join('') || '<p class="sheet-note">还没有可查看的作品。可以让 Codex 把成品保存到当前项目，并在回复中附上文件链接。</p>'}${state.artifactError ? `<p class="sheet-note error-text">${escapeHtml(state.artifactError)}</p>` : ''}`;
+  } else if (state.sheet === 'conversation') {
+    title = '对话选项';
+    body = `<button class="choice-row" data-open-artifacts><span>${icon('folder')} 查看作品<small>图片、HTML、文本及其他成品</small></span>${icon('chevron')}</button><button class="choice-row" data-archive="${escapeHtml(state.selectedId)}"><span>${selectedThread()?.archived ? '恢复到对话列表' : '归档这条对话'}<small>保留聊天内容，可在「已归档」中恢复</small></span>${icon('chevron')}</button>`;
   } else if (state.sheet === 'project') {
     title = '从哪里开始';
     const projects = state.capabilities?.projects || [];
@@ -603,7 +626,7 @@ async function uploadFiles(files, client) {
   return files.map(f => f.uploadId);
 }
 function renderSettings() {
-  return `<section class="settings-page"><div class="settings-heading"><span class="eyebrow">MAKE IT YOURS</span><h1>留一方，自己的天地。</h1><p>挑一种心境，继续你的灵感。</p></div><section class="settings-section"><h2>外观主题</h2><div class="theme-grid">${Object.entries(themes).map(([id, t]) => `<button class="theme-card" data-theme-choice="${id}" aria-pressed="${theme === id}"><span class="theme-swatch swatch-${id}"><i></i><b>${icon(id === 'dao' ? 'leaf' : id === 'stars' ? 'sparkle' : 'message')}</b></span><span class="theme-name">${t.name}<span class="theme-check">${icon('check')}</span></span><small>${t.label}</small></button>`).join('')}</div></section><section class="settings-section"><h2>连接电脑 <span class="settings-status ${connectionClass()}">${connectionLabel()}</span></h2><p class="section-note">沿用 cc-switch 配置。电脑与手机连接同一 Wi-Fi，或通过自己的 VPN 连接。</p>${renderSettingsForm()}${state.config.baseUrl ? '<button class="button subtle disconnect" data-clear>断开并清除配对</button>' : '<button class="button subtle demo-link" data-demo>先体验演示对话</button>'}</section><section class="settings-section"><h2>外出连接</h2><p class="section-note">可通过 Tailscale 等私人 VPN 跨网络使用。电脑与手机加入同一 VPN 后，把电脑地址改为 VPN 分配的 IP，保留端口 15731 和配对信息。无需登录 OpenAI 账户；VPN 需自行安装与连接。电脑需要保持开机并运行电脑桥。</p></section><section class="settings-section about"><h2>关于 Codex Pocket <small>1.2.1</small></h2><p>模型、推理强度与项目从电脑读取。手机消息通过电脑窗口发送到同一条对话；已同步的审批可在任一端处理。电脑需要同时打开 Codex 与电脑桥。</p></section></section>`;
+  return `<section class="settings-page"><div class="settings-heading"><span class="eyebrow">MAKE IT YOURS</span><h1>留一方，自己的天地。</h1><p>挑一种心境，继续你的灵感。</p></div><section class="settings-section"><h2>外观主题</h2><div class="theme-grid">${Object.entries(themes).map(([id, t]) => `<button class="theme-card" data-theme-choice="${id}" aria-pressed="${theme === id}"><span class="theme-swatch swatch-${id}"><i></i><b>${icon(id === 'dao' ? 'leaf' : id === 'stars' ? 'sparkle' : 'message')}</b></span><span class="theme-name">${t.name}<span class="theme-check">${icon('check')}</span></span><small>${t.label}</small></button>`).join('')}</div></section><section class="settings-section"><h2>连接电脑 <span class="settings-status ${connectionClass()}">${connectionLabel()}</span></h2><p class="section-note">沿用 cc-switch 配置。电脑与手机连接同一 Wi-Fi，或通过自己的 VPN 连接。</p>${renderSettingsForm()}${state.config.baseUrl ? '<button class="button subtle disconnect" data-clear>断开并清除配对</button>' : '<button class="button subtle demo-link" data-demo>先体验演示对话</button>'}</section><section class="settings-section"><h2>外出连接</h2><p class="section-note">可通过 Tailscale 等私人 VPN 跨网络使用。电脑与手机加入同一 VPN 后，把电脑地址改为 VPN 分配的 IP，保留端口 15731 和配对信息。无需登录 OpenAI 账户；VPN 需自行安装与连接。电脑需要保持开机并运行电脑桥。</p></section><section class="settings-section about"><h2>关于 Codex Pocket <small>1.3.0</small></h2><p>模型、推理强度与项目从电脑读取。手机可独立发送任务和审批，沿用电脑配置；已有桌面会话会交给当前窗口处理。电脑桥可在后台独立运行，无需打开 Codex 窗口；也不会自动弹出电脑会话。</p></section></section>`;
 }
 let renderedThreadId = null, pageKey = '', messageMarkup = '', historyMarkup = '';
 let followMessages = true, composing = false, lastNativeAppearance = '';
@@ -616,7 +639,7 @@ function applyTheme() {
 }
 function syncNativeAppearance() {
   if (!window.Capacitor?.isNativePlatform?.()) return;
-  const options = { background: themes[theme].color, light: themes[theme].light, overlayOpen: state.drawer || state.screen === 'settings' || !!state.sheet };
+  const options = { background: themes[theme].color, light: themes[theme].light, overlayOpen: state.drawer || state.screen === 'settings' || !!state.sheet || !!previewState };
   const signature = JSON.stringify(options);
   if (lastNativeAppearance === signature) return;
   lastNativeAppearance = signature;
@@ -625,11 +648,11 @@ function syncNativeAppearance() {
 function render() {
   const root = document.querySelector('#app');
   if (!root.firstElementChild) {
-    root.innerHTML = `<div class="app-shell"><div class="chat-surface"><header class="chat-header"></header><main class="main-content"></main></div><button class="drawer-scrim" aria-label="关闭对话记录" tabindex="-1" hidden></button><aside class="history-drawer" role="dialog" aria-modal="true" aria-label="对话记录" hidden><div class="drawer-heading"><span class="drawer-brand">${icon('leaf')} Pocket<span>你的灵感手札</span></span><button class="icon-button" data-close-drawer aria-label="关闭对话记录">${icon('x')}</button></div><button class="new-chat" data-new-thread>${icon('plus')} 开启新对话</button><label class="history-search">${icon('search')}<input id="history-search" type="search" placeholder="搜索对话标题…" aria-label="搜索对话标题" autocomplete="off" /></label><div class="history-list"></div><footer class="drawer-footer"><button class="drawer-settings" data-screen="settings"><span class="settings-avatar">${icon('sliders')}</span><span><strong>设置与配对</strong><small>主题、电脑连接</small></span>${icon('chevron')}</button><div class="drawer-connection"><span class="connection-text"></span><button class="icon-button" data-sync aria-label="同步会话">${icon('refresh')}</button></div></footer></aside></div>`;
+    root.innerHTML = `<div class="app-shell"><div class="chat-surface"><header class="chat-header"></header><main class="main-content"></main></div><button class="drawer-scrim" aria-label="关闭对话记录" tabindex="-1" hidden></button><aside class="history-drawer" role="dialog" aria-modal="true" aria-label="对话记录" hidden><div class="drawer-heading"><span class="drawer-brand">${icon('leaf')} Pocket<span>你的灵感手札</span></span><button class="icon-button" data-close-drawer aria-label="关闭对话记录">${icon('x')}</button></div><button class="new-chat" data-new-thread>${icon('plus')} 开启新对话</button><label class="history-search">${icon('search')}<input id="history-search" type="search" placeholder="搜索对话标题…" aria-label="搜索对话标题" autocomplete="off" /></label><div class="history-tabs"><button data-history-mode="active">对话</button><button data-history-mode="archived">已归档</button></div><div class="history-list"></div><footer class="drawer-footer"><button class="drawer-settings" data-screen="settings"><span class="settings-avatar">${icon('sliders')}</span><span><strong>设置与配对</strong><small>主题、电脑连接</small></span>${icon('chevron')}</button><div class="drawer-connection"><span class="connection-text"></span><button class="icon-button" data-sync aria-label="同步会话">${icon('refresh')}</button></div></footer></aside></div>`;
   }
   const settings = state.screen === 'settings', thread = selectedThread();
   const title = settings ? '设置' : thread?.title || '新对话';
-  const head = `<button class="icon-button" ${settings ? 'data-screen="threads" aria-label="返回对话"' : 'data-open-drawer aria-label="打开对话记录" aria-expanded="'+state.drawer+'"'}>${icon(settings ? 'back' : 'menu')}</button><div class="chat-title"><strong>${escapeHtml(title)}</strong><span class="chat-subtitle ${connectionClass()}"><i></i>${state.config.mode === 'demo' ? '演示模式' : state.connection === 'connected' ? 'Codex · 已连接' : connectionLabel()}</span></div><div class="header-actions">${!settings && pendingCount() ? `<button class="icon-button approval-badge" data-pending aria-label="查看待审批操作">${icon('shield')}<b>${pendingCount()}</b></button>` : ''}<button class="icon-button" data-new-thread aria-label="新对话">${icon('plus')}</button></div>`;
+  const head = `<button class="icon-button" ${settings ? 'data-screen="threads" aria-label="返回对话"' : 'data-open-drawer aria-label="打开对话记录" aria-expanded="'+state.drawer+'"'}>${icon(settings ? 'back' : 'menu')}</button><div class="chat-title"><strong>${escapeHtml(title)}</strong><span class="chat-subtitle ${connectionClass()}"><i></i>${state.config.mode === 'demo' ? '演示模式' : state.connection === 'connected' ? 'Codex · 已连接' : connectionLabel()}</span></div><div class="header-actions">${!settings && thread ? `<button class="icon-button" data-conversation-menu aria-label="对话选项">${icon('more')}</button>` : ''}${!settings && pendingCount() ? `<button class="icon-button approval-badge" data-pending aria-label="查看待审批操作">${icon('shield')}<b>${pendingCount()}</b></button>` : ''}<button class="icon-button" data-new-thread aria-label="新对话">${icon('plus')}</button></div>`;
   const header = root.querySelector('.chat-header');
   if (header.innerHTML !== head) header.innerHTML = head;
   header.classList.toggle('has-pending', !settings && pendingCount() > 0);
@@ -658,10 +681,11 @@ function render() {
     }
     const input = main.querySelector('#composer-input');
     if (input.value !== state.draft && !composing) input.value = state.draft;
-    input.readOnly = state.busy;
+    input.readOnly = state.busy || !!thread?.archived;
+    input.placeholder = thread?.archived ? '已归档 · 恢复后继续对话' : '写下你的想法…';
     resizeComposer(input);
     const sending = main.querySelector('.send-button');
-    sending.disabled = state.busy || (!state.draft.trim() && !currentFiles().length);
+    sending.disabled = state.busy || !!thread?.archived || (!state.draft.trim() && !currentFiles().length);
     sending.innerHTML = state.busy ? '<span class="button-spinner"></span>' : icon('arrow');
     const caption = main.querySelector('.composer-caption');
     const working = state.config.mode !== 'demo' && thread && ['active', 'inProgress', 'running', 'busy'].includes(thread.status);
@@ -680,6 +704,7 @@ function render() {
     history.scrollTop = scroll;
   }
   root.querySelector('.connection-text').innerHTML = `<i class="status-dot ${connectionClass()}"></i>${connectionLabel()}`;
+  root.querySelectorAll('[data-history-mode]').forEach(button => button.setAttribute('aria-pressed', String((button.dataset.historyMode === 'archived') === state.historyArchived)));
   const drawer = root.querySelector('.history-drawer');
   drawer.hidden = !state.drawer;
   root.querySelector('.drawer-scrim').hidden = !state.drawer;
@@ -710,7 +735,7 @@ async function refreshThread(id, a = adapter()) {
   const full = await a.getThread(id);
   if(epoch !== state.epoch) return;
   const i=state.threads.findIndex(t=>t.id===id);
-  if(i>=0) state.threads[i]=full;
+  if(i>=0) state.threads[i]={...full, archived: state.threads[i].archived};
   attachApprovals();
 }
 async function syncThreads({quiet=false}={}) {
@@ -720,7 +745,7 @@ async function syncThreads({quiet=false}={}) {
   state.syncing=true;
   try {
     const a=adapter();
-    const [rows, approvals]=await Promise.all([a.listThreads(),a.listApprovals()]);
+    const [rows, approvals]=await Promise.all([a.listThreads(state.historyArchived),a.listApprovals()]);
     if (Date.now() - state.capabilitiesAt > 60000) await loadCapabilities();
     if(epoch!==state.epoch) return;
     const previous=new Map(state.threads.map(t=>[t.id,t]));
@@ -770,11 +795,13 @@ function createThread() {
   state.screen = 'threads'; state.drawer = false; state.onboarding = false;
   state.epoch++; state.sheet = ''; state.sheetThreadId = null;
   state.sendError = null; state.projectChoice = null;
+  if (state.historyArchived) { state.historyArchived = false; state.threads = []; syncThreads({ quiet: true }); }
   followMessages = true; persistUi(); render();
   openSheet('project');
 }
 async function sendMessage(form) {
   if (state.busy || composing) return;
+  if (selectedThread()?.archived) { setToast('请先恢复这条对话，再继续发送'); return; }
   const text = form.querySelector('textarea').value.trim(), files = currentFiles();
   if (!text && !files.length) return;
   if (!state.config.baseUrl && state.config.mode !== 'demo') {
@@ -793,7 +820,7 @@ async function sendMessage(form) {
   let id = oldKey;
   try {
     const attachments = state.config.mode === 'demo' ? [] : await uploadFiles(files, a);
-    state.sendPhase = '正在发送到电脑当前对话…'; render();
+    state.sendPhase = '正在交给电脑处理…'; render();
     if (!id) {
       const t = await a.createThread({ ...options, ...(state.projectChoice || {}), title: text || files[0]?.name, requestId: retry.requestId });
       if (!state.threads.some(x => x.id === t.id)) state.threads.unshift(t);
@@ -810,7 +837,7 @@ async function sendMessage(form) {
     for (const file of files) if (file.preview) URL.revokeObjectURL(file.preview);
     if (state.config.mode !== 'demo') {
       const t = state.threads.find(t => t.id === id);
-      if (t) { t.status = 'active'; t.owner = 'desktop'; if (options.model) t.model = options.model; if (options.effort) t.reasoningEffort = options.effort; }
+      if (t) { t.status = 'active'; t.owner = result.transport === 'bridge' ? 'bridge' : 'desktop'; if (options.model) t.model = options.model; if (options.effort) t.reasoningEffort = options.effort; }
       try { await refreshThread(id); } catch { setToast('消息已送达，等待同步回复'); }
     }
   } catch (e) {
@@ -857,6 +884,98 @@ function parsePair(text) {
   try {const u=new URL(text);if(u.protocol==='codexpocket:')return{url:u.searchParams.get('url')||'',token:u.searchParams.get('token')||'',code:u.searchParams.get('code')||''};}catch{}
   const p=safeJson(text);return p?.url?{url:p.url,token:p.token||'',code:p.code||''}:null;
 }
+async function switchHistory(archived) {
+  if (state.busy || state.syncing || state.historyArchived === archived) return;
+  state.drafts[state.selectedId] = state.draft;
+  state.historyArchived = archived; state.selectedId = ''; state.draft = state.drafts[''] || '';
+  state.epoch++; state.sheet = ''; state.sheetThreadId = null; state.sendError = null;
+  if (state.config.mode !== 'demo') state.threads = [];
+  render();
+  await syncThreads({ quiet: true });
+}
+function recoverDraft() {
+  if (state.busy) return;
+  const id = state.selectedId, thread = selectedThread();
+  state.drafts[''] = state.draft; state.files[''] = state.files[id] || []; state.files[id] = [];
+  state.selections[''] = { ...(state.selections[id] || {}) }; delete state.retries[''];
+  state.selectedId = ''; state.draft = state.drafts['']; state.sheet = ''; state.sheetThreadId = null;
+  state.sendError = null; state.epoch++; state.historyArchived = false;
+  state.projectChoice = thread?.projectId && thread.cwd ? { projectId: thread.projectId, cwd: thread.cwd } : null;
+  persistUi(); render(); setToast('草稿和附件已带入新对话，请点击发送');
+}
+async function archiveConversation(id) {
+  if (state.busy) return;
+  const thread = state.threads.find(t => t.id === id);
+  if (!thread) return;
+  const archived = !thread.archived;
+  state.busy = true; state.epoch++; render();
+  try {
+    if (state.config.mode !== 'demo') await adapter().archive(id, archived);
+    thread.archived = archived;
+    if (state.selectedId === id) {
+      state.drafts[id] = state.draft; state.selectedId = ''; state.draft = state.drafts[''] || '';
+      state.sheet = ''; state.sheetThreadId = null; state.sendError = null;
+    }
+    if (state.config.mode !== 'demo') state.threads = state.threads.filter(t => t.id !== id);
+    setToast(archived ? '已归档，可在「已归档」中恢复' : '已恢复到对话列表');
+  } catch (error) { setToast('操作未完成：' + error.message); }
+  finally { state.busy = false; render(); }
+}
+let previewState = null;
+function closePreview() {
+  if (previewState?.url) URL.revokeObjectURL(previewState.url);
+  previewState = null; document.querySelector('#artifact-preview')?.remove();
+  document.querySelector('#app').inert = false; syncNativeAppearance();
+}
+async function openArtifact(fileId) {
+  const threadId = state.selectedId, epoch = state.epoch;
+  closePreview(); document.activeElement?.blur();
+  const host = document.createElement('section'); host.id = 'artifact-preview'; host.className = 'artifact-preview';
+  host.setAttribute('role', 'dialog'); host.setAttribute('aria-modal', 'true'); host.setAttribute('aria-label', '作品预览');
+  host.innerHTML = `<header><button class="icon-button" data-close-preview aria-label="关闭预览">${icon('back')}</button><strong>作品预览</strong><button class="button subtle" data-share-artifact disabled>分享 / 保存</button></header><div class="preview-content"><p class="preview-note">正在加载作品…</p></div>`;
+  document.body.append(host); previewState = { host }; document.querySelector('#app').inert = true; syncNativeAppearance();
+  host.querySelector('[data-close-preview]').focus();
+  try {
+    const file = await adapter().artifact(threadId, fileId);
+    if (previewState?.host !== host) return;
+    if (epoch !== state.epoch || threadId !== state.selectedId) { closePreview(); return; }
+    const bytes = Uint8Array.from(atob(file.base64), c => c.charCodeAt(0));
+    const blob = new Blob([bytes], { type: file.mime });
+    previewState = { host, file, url: URL.createObjectURL(blob) };
+    host.querySelector('strong').textContent = file.name;
+    host.querySelector('[data-share-artifact]').disabled = false;
+    const content = host.querySelector('.preview-content'); content.replaceChildren();
+    if (file.html) {
+      if (window.Capacitor?.isNativePlatform?.()) {
+        content.innerHTML = '<p class="preview-note">HTML 在独立预览窗口运行，无法访问 App 的配对信息。外部网络资源已停用。</p><button class="button primary" data-native-preview>打开 HTML 预览</button>';
+        await nativeCall('PocketUI', 'previewHtml', { html: file.html, name: file.name });
+        return;
+      }
+      const frame = document.createElement('iframe'); frame.title = file.name;
+      frame.setAttribute('sandbox', 'allow-scripts'); frame.referrerPolicy = 'no-referrer'; frame.srcdoc = file.html;
+      content.append(frame);
+      const note = document.createElement('p'); note.className = 'preview-note'; note.textContent = '本地预览 · 外部网络资源已停用，部分联网功能需在电脑运行。'; content.append(note);
+    } else if (file.mime.startsWith('image/')) {
+      const img = document.createElement('img'); img.alt = file.name; img.src = previewState.url; content.append(img);
+    } else if (file.text !== undefined) {
+      const pre = document.createElement('pre'); pre.textContent = file.text; content.append(pre);
+    } else if (/^(audio|video)\//.test(file.mime)) {
+      const media = document.createElement(file.mime.startsWith('audio') ? 'audio' : 'video'); media.controls = true; media.src = previewState.url; content.append(media);
+    } else {
+      content.innerHTML = '<p class="preview-note">此格式可通过「分享 / 保存」交给手机上的其他应用查看。</p>';
+    }
+  } catch (error) { if (previewState?.host === host) host.querySelector('.preview-content').textContent = '无法预览：' + error.message; }
+}
+async function shareArtifact() {
+  const current = previewState;
+  if (!current?.file) return;
+  const button = current.host.querySelector('[data-share-artifact]'); button.disabled = true;
+  try {
+    if (window.Capacitor?.isNativePlatform?.()) await nativeCall('PocketUI', 'shareFile', { name: current.file.name, mime: current.file.mime, base64: current.file.base64 });
+    else { const a = document.createElement('a'); a.href = current.url; a.download = current.file.name; a.click(); }
+  } catch (error) { setToast('分享失败：' + error.message); }
+  finally { if (previewState === current) button.disabled = false; }
+}
 function closeDrawer() {
   state.drawer = false; render();
   document.querySelector('[data-open-drawer]')?.focus({ preventScroll: true });
@@ -879,6 +998,18 @@ function bindEvents() {
   document.addEventListener('click', async e => {
     const el = e.target.closest('button');
     if (!el || el.disabled) return;
+    if (el.matches('[data-close-preview]')) { closePreview(); return; }
+    if (el.matches('[data-share-artifact]')) { shareArtifact(); return; }
+    if (el.matches('[data-native-preview]')) {
+      if (previewState?.file?.html) try { await nativeCall('PocketUI', 'previewHtml', { html: previewState.file.html, name: previewState.file.name }); } catch (error) { setToast(error.message); }
+      return;
+    }
+    if (el.matches('[data-recover-draft]')) { recoverDraft(); return; }
+    if (el.matches('[data-artifact]')) { openArtifact(el.dataset.artifact); return; }
+    if (el.matches('[data-history-mode]')) { switchHistory(el.dataset.historyMode === 'archived'); return; }
+    if (el.matches('[data-archive]')) { archiveConversation(el.dataset.archive); return; }
+    if (el.matches('[data-conversation-menu]')) { openSheet('conversation'); return; }
+    if (el.matches('[data-open-artifacts]')) { openSheet('artifacts'); return; }
     if (el.matches('[data-open-drawer]')) {
       document.activeElement?.blur(); state.sheet=''; state.sheetThreadId=null; state.drawer=true; render();
       document.querySelector('[data-close-drawer]')?.focus({preventScroll:true});
@@ -962,9 +1093,15 @@ function bindEvents() {
   document.addEventListener('compositionstart', e => {if(e.target.id==='composer-input')composing=true;});
   document.addEventListener('compositionend', e => {if(e.target.id==='composer-input'){composing=false;state.draft=e.target.value;state.drafts[state.selectedId]=state.draft;}});
   document.addEventListener('keydown', e => {
-    if(e.key==='Escape') {if(state.sheet)closeSheet();else if(state.drawer)closeDrawer();else if(state.screen==='settings')setScreen('threads');}
+    if(e.key==='Escape') {if(previewState)closePreview();else if(state.sheet)closeSheet();else if(state.drawer)closeDrawer();else if(state.screen==='settings')setScreen('threads');}
     if(e.target.id==='composer-input' && (e.metaKey||e.ctrlKey) && e.key==='Enter' && !e.isComposing) {e.preventDefault();e.target.form.requestSubmit();}
-    if (state.sheet && e.key === 'Tab') {
+    if (previewState && e.key === 'Tab') {
+      const controls = [...previewState.host.querySelectorAll('button:not(:disabled),iframe')];
+      const first = controls[0], last = controls[controls.length - 1];
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last?.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first?.focus(); }
+    }
+    if (state.sheet && !previewState && e.key === 'Tab') {
       const controls = [...document.querySelector('.bottom-sheet').querySelectorAll('button:not(:disabled)')];
       const first = controls[0], last = controls[controls.length - 1];
       if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last?.focus(); }
@@ -977,7 +1114,7 @@ function bindEvents() {
       else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.focus();}
     }
   });
-  window.addEventListener('pocketBack',()=>{if(state.sheet)closeSheet();else if(state.drawer)closeDrawer();else if(state.screen==='settings')setScreen('threads');});
+  window.addEventListener('pocketBack',()=>{if(previewState)closePreview();else if(state.sheet)closeSheet();else if(state.drawer)closeDrawer();else if(state.screen==='settings')setScreen('threads');});
   window.addEventListener('pocketViewport',e=>updateViewport(e.detail));
   window.addEventListener('resize',()=>updateViewport());
   window.visualViewport?.addEventListener('resize',()=>updateViewport());

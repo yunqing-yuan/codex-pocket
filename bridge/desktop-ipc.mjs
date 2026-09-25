@@ -3,8 +3,6 @@ import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { execFile } from 'node:child_process';
-import { setTimeout as delay } from 'node:timers/promises';
 
 const versions = {
   initialize: 0, 'thread-owner-discovery': 1,
@@ -122,22 +120,16 @@ export class DesktopIpc extends EventEmitter {
     this.owners.set(id, owner); this.follow(id, owner);
     return owner;
   }
-  async acquire(id) {
-    let owner = await this.discover(id);
-    if (owner) return owner;
-    if (!/^[a-f0-9-]{36}$/i.test(id)) throw failure('对话编号无效');
-    const url = `codex://threads/${id}`;
-    // Open an existing conversation through the registered OS protocol handler.
-    // This is only reached after the phone user explicitly submits a message.
-    await new Promise((resolve, reject) => {
-      const command = process.platform === 'win32' ? 'powershell.exe' : process.platform === 'darwin' ? 'open' : 'xdg-open';
-      const args = process.platform === 'win32' ? ['-NoProfile', '-NonInteractive', '-Command', `Start-Process '${url}'`] : [url];
-      execFile(command, args, { windowsHide: true, timeout: 5000 }, error => error ? reject(failure('无法打开电脑对话，请在 Codex 中打开后重试')) : resolve());
-    });
-    for (let i = 0; i < 12; i++) {
-      await delay(500); owner = await this.discover(id); if (owner) return owner;
-    }
-    throw failure('电脑尚未打开这条对话，请在 Codex 中点开它后重试；消息已保留', 'desktop_thread_not_open');
+  forget(id) {
+    const owner = this.following.get(id);
+    if (owner && this.socket && !this.socket.destroyed) this.write({ type: 'broadcast', method: 'thread-stream-following-changed', version: 1, sourceClientId: this.clientId, targetClientIds: [owner], params: { hostId: 'local', conversationId: id, following: false } });
+    this.following.delete(id); this.states.delete(id); this.owners.delete(id);
+  }
+  async notifyArchived(id, archived) {
+    try {
+      await this.connect();
+      this.write({ type: 'broadcast', method: archived ? 'thread-archived' : 'thread-unarchived', version: archived ? 2 : 1, sourceClientId: this.clientId, params: { hostId: 'local', conversationId: id } });
+    } catch { /* Desktop is optional; archive state is already persisted. */ }
   }
   follow(id, owner, force = false) {
     if (!force && this.following.get(id) === owner) return;

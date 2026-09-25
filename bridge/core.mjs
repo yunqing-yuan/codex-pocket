@@ -74,10 +74,7 @@ export function itemToMessage(item = {}) {
   if (item.type === 'userMessage') return { ...base, role: 'user', text: textFromInput(item.content) };
   if (item.type === 'agentMessage') return { ...base, role: 'assistant', text: String(item.text ?? '') };
   if (item.type === 'plan') return { ...base, role: 'assistant', text: String(item.text ?? ''), plan: true };
-  if (item.type === 'reasoning') {
-    const text = textFromInput(item.summary) || textFromInput(item.content);
-    return text ? { ...base, role: 'assistant', text, reasoning: true } : null;
-  }
+  if (item.type === 'reasoning') return null;
   if (item.type === 'commandExecution' || item.type === 'fileChange' || item.type === 'mcpToolCall' || item.type === 'dynamicToolCall') {
     const tool = commandTool(item);
     const text = item.type === 'commandExecution'
