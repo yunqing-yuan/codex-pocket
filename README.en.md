@@ -27,7 +27,7 @@ This is an unofficial community project, not affiliated with or endorsed by Open
 - Synchronized command, file and permission approvals; task interruption.
 - Up to 6 attachments per message, 20 MB each. Supported images become image inputs; documents are saved on the computer for its tools to read.
 - Available models, reasoning levels and existing project folders read from the computer.
-- Per-conversation drafts within the app session, reply copying and four themes.
+- Encrypted offline conversations and text drafts that survive app restarts, automatic reconnect, reply copying and four themes.
 - Android Keystore credential storage and no built-in analytics service.
 
 ## Install
@@ -40,7 +40,7 @@ Requirements: **Android 8+**, **Windows**, **Node.js 20/22 LTS**, and a working 
 4. Run `Start-Pocket.cmd`. A local pairing page displays the computer address and a six-digit code.
 5. On the same trusted network, open the app drawer → settings (设置与配对), enter the address and code, and connect.
 
-Keep the computer awake, signed in and the bridge running; the screen may be locked. The Codex desktop window can remain closed. After pairing, run `Enable-Background.cmd` to start the bridge automatically at Windows sign-in without opening chat or pairing windows. `Disable-Background.cmd` removes automatic startup. To share the app, distribute the APK and the complete bridge ZIP. Each user configures their own provider and computer. Never share an existing `runtime/` folder.
+Keep the computer awake, signed in and the bridge running; the screen may be locked. The Codex desktop window can remain closed. After pairing, run `Enable-Background.cmd` to start the bridge automatically at Windows sign-in without opening chat or pairing windows. The hidden watcher restarts a bridge that exits. `Disable-Background.cmd` removes automatic startup and stops the watcher; the current bridge keeps running. Saved pairing does not expire on app restart or network loss. Only conversation content already loaded on the phone is available offline; sending and approvals need a connection. Unsent attachments are not persisted across app restarts. To share the app, distribute the APK and the complete bridge ZIP. Each user configures their own provider and computer. Never share an existing `runtime/` folder.
 
 Version 1.3 adds chat archive/restore, hides structured reasoning items, and provides previews and Android sharing for files linked or modified within the conversation's project. HTML previews isolate content and disable external networking; complex modules and server-dependent sites may not work. Background turns release ownership on completion so the desktop can resume the same thread afterward. Existing desktop owners receive messages through IPC. Pocket never automatically opens or focuses a desktop chat; an already-open conversation may still display synchronized content, so lock your screen for privacy.
 
@@ -61,7 +61,7 @@ The bridge stores its access token in `runtime/pairing.json` and attachments in 
 - Android 8 / API 26 minimum, with a working System WebView. No iOS package.
 - Windows is the supported distribution path. Full macOS/Linux workflows are unverified.
 - Development used Codex Windows `26.917.9434.0`. Same-thread sending uses an internal desktop IPC protocol that may change with desktop updates.
-- The `1.3.0` APK uses debug signing and is a preview, not a store release.
+- The `1.3.1` APK uses debug signing and is a preview, not a store release.
 - No claim of exhaustive device testing or an independent security audit. Cross-network device usage has not been comprehensively validated.
 - No built-in document parser, background push notifications, automatic public tunnel, or per-user access isolation.
 

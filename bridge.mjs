@@ -124,7 +124,10 @@ class CodexBridge extends EventEmitter {
     this.child.stderr.on("data", (chunk) =>
       process.stderr.write(`[codex] ${chunk}`),
     );
-    this.child.on("error", (error) => this.fail(error));
+    this.child.on("error", (error) => {
+      this.fail(error);
+      this.emit("event", "bridge.closed", { message: error.message });
+    });
     this.child.on("exit", (code, signal) => {
       this.fail(
         new Error(`Codex app-server exited (${code ?? signal ?? "unknown"})`),
@@ -328,7 +331,7 @@ class CodexBridge extends EventEmitter {
       pid: this.child.pid,
       initialized: true,
       executable: basename(this.executable),
-      version: '1.3.0',
+      version: '1.3.1',
       sameThreadSending: true,
       backgroundExecution: true,
     };
@@ -364,6 +367,7 @@ class CodexBridge extends EventEmitter {
     const items = [];
     const turnTimes = new Map();
     const turnErrors = [];
+    let historyIncomplete = false;
     let turnCursor = null;
     try {
       do {
@@ -418,6 +422,7 @@ class CodexBridge extends EventEmitter {
       } while (cursor);
     } catch (error) {
       // Some Codex builds reject item pagination for a newly-created empty thread.
+      historyIncomplete = true;
       // Keep the thread usable and use embedded turns when the server supplied them.
       const embedded = (raw.turns || []).flatMap((turn) => turn.items || turn.item || []);
       if (Array.isArray(embedded)) items.push(...embedded);
@@ -441,7 +446,7 @@ class CodexBridge extends EventEmitter {
       thread.title = live.title || thread.title;
       thread.owner = 'desktop';
     }
-    return { ...thread, tools: mapped.tools };
+    return { ...thread, historyIncomplete, tools: mapped.tools };
   }
 
   async capabilities() {

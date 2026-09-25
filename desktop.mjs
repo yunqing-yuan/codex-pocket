@@ -153,6 +153,14 @@ function shutdown() {
   running.server.close();
   panel.close();
 }
+running.bridge.on('event', (name) => {
+  if (name !== 'bridge.closed') return;
+  // A closed engine must not leave a healthy-looking pairing panel behind.
+  // The current-user background watcher will start a fresh engine.
+  shutdown();
+  process.exitCode = 1;
+  setTimeout(() => process.exit(1), 500).unref();
+});
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
 running.server.on("error", (error) => {

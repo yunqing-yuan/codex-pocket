@@ -1,6 +1,7 @@
 const STATE_KEY = "codex-pocket:ui";
 const SESSION_KEY = "codex-pocket:credentials";
 const THEME_KEY = "codex-pocket:theme";
+const HISTORY_KEY = "codex-pocket:history";
 const themes = {
   dao: { name: "青岚", label: "道系 · 山静水清", title: "心有山海，落笔成章。", subtitle: "一念起，万事从容。", color: "#f5f3ec", light: true },
   stars: { name: "星河", label: "星辰 · 灵感漫游", title: "每个念头，都有回响。", subtitle: "让想象，抵达更远的地方。", color: "#101320", light: false },
@@ -116,6 +117,7 @@ const state = {
   sheetThreadId: null,
   capabilities: null,
   capabilitiesAt: 0,
+  capabilitiesLoading: false,
   capabilityError: '',
   selections: {},
   projectChoice: null,
@@ -123,7 +125,68 @@ const state = {
   retries: {},
   sendError: null,
   sendPhase: '',
+  cacheError: '',
 };
+let historyIdentity = '', historyReady = false, historyTimer, historyQueue = Promise.resolve(), lastHistory = '';
+async function pairingIdentity(token) {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(token));
+  return [...new Uint8Array(digest)].map(n => n.toString(16).padStart(2, '0')).join('');
+}
+async function loadHistory() {
+  if (!state.config.token || state.config.mode === 'demo') return;
+  historyIdentity = await pairingIdentity(state.config.token);
+  try {
+    const result = window.Capacitor?.isNativePlatform?.()
+      ? await nativeCall('PocketCredentials', 'loadHistory')
+      : { value: sessionStorage.getItem(HISTORY_KEY) };
+    const saved = safeJson(result?.value);
+    if (saved?.identity === historyIdentity && saved.version === 1 && Array.isArray(saved.threads)) {
+      state.threads = saved.threads.map(normalizeThread);
+      state.drafts = saved.drafts || {};
+      state.selectedId = state.threads.some(t => t.id === saved.selectedId) ? saved.selectedId : '';
+      state.historyArchived = Boolean(saved.historyArchived);
+      state.draft = state.drafts[state.selectedId] || '';
+      state.selections = saved.selections || {};
+      state.projectChoice = saved.projectChoice || null;
+      state.capabilities = saved.capabilities || null;
+      state.lastSync = saved.lastSync || 0;
+    }
+  } catch {
+    state.cacheError = '离线记录暂时无法读取，联网后会重新同步';
+    // Do not overwrite an unreadable file with an empty offline screen.
+    historyReady = false;
+    return;
+  }
+  historyReady = true;
+}
+function saveHistory({ immediate = false } = {}) {
+  clearTimeout(historyTimer);
+  if (!historyReady || !state.config.token || state.config.mode === 'demo') return historyQueue;
+  if (!immediate) { historyTimer = setTimeout(() => saveHistory({ immediate: true }), 300); return historyQueue; }
+  const content = JSON.stringify({
+    version: 1, identity: historyIdentity, selectedId: state.selectedId,
+    historyArchived: state.historyArchived,
+    threads: state.threads.map(t => ({ ...t, messages: t.messages.filter(m => !m.approval) })),
+    drafts: { ...state.drafts, [state.selectedId]: state.draft },
+    selections: state.selections, projectChoice: state.projectChoice, capabilities: state.capabilities,
+  });
+  if (content === lastHistory) return historyQueue;
+  lastHistory = content;
+  const value = JSON.stringify({ ...JSON.parse(content), lastSync: state.lastSync });
+  const identity = historyIdentity;
+  historyQueue = historyQueue.then(async () => {
+    if (identity !== historyIdentity || !historyReady) return;
+    if (window.Capacitor?.isNativePlatform?.()) await nativeCall('PocketCredentials', 'saveHistory', { value });
+    else sessionStorage.setItem(HISTORY_KEY, value);
+    state.cacheError = '';
+  }).catch(() => {
+    lastHistory = '';
+    const alreadyReported = Boolean(state.cacheError);
+    state.cacheError = '离线保存未完成，请检查手机空间；之前保存的记录仍保留';
+    if (!document.hidden && !alreadyReported) { render(); setToast(state.cacheError); }
+  });
+  return historyQueue;
+}
 function persistUi() {
   sessionStorage.setItem(
     STATE_KEY,
@@ -133,6 +196,7 @@ function persistUi() {
       config: { ...state.config, token: "" },
     }),
   );
+  saveHistory();
 }
 function nativeCall(pluginName, methodName, options = {}) {
   const cap = window.Capacitor;
@@ -184,9 +248,15 @@ async function saveCredentials() {
   }
 }
 async function clearCredentials() {
+  state.busy = true;
+  clearTimeout(historyTimer);
+  historyReady = false;
+  await historyQueue;
   try {
     await plugin()?.clear?.();
-  } catch { setToast('无法清除设备配对，请重新打开 App 后重试'); return; }
+  } catch { historyReady = true; state.busy = false; setToast('无法清除设备配对，请重新打开 App 后重试'); return; }
+  historyIdentity = ''; lastHistory = ''; state.busy = false; state.cacheError = '';
+  sessionStorage.removeItem(HISTORY_KEY);
   sessionStorage.removeItem(SESSION_KEY);
   state.epoch++;
   state.threads = []; state.approvals = []; state.selectedId = ''; state.draft = ''; state.drafts = {};
@@ -244,6 +314,7 @@ function normalizeThread(raw = {}) {
     projectId: raw.projectId || null,
     forkedFromId: raw.forkedFromId || null,
     archived: Boolean(raw.archived),
+    historyIncomplete: Boolean(raw.historyIncomplete),
     messages,
   };
 }
@@ -269,7 +340,7 @@ class HttpAdapter {
     };
     try {
       if (window.Capacitor?.isNativePlatform?.()) {
-        const response = await nativeCall('CapacitorHttp', 'request', { url: `${this.config.baseUrl.replace(/\/$/, '')}${path}`, method: options.method || 'GET', headers, data: options.body ? JSON.parse(options.body) : undefined, responseType: 'json', connectTimeout: 12000, readTimeout: options.timeoutMs || 75000 });
+        const response = await nativeCall('CapacitorHttp', 'request', { url: `${this.config.baseUrl.replace(/\/$/, '')}${path}`, method: options.method || 'GET', headers, data: options.body ? JSON.parse(options.body) : undefined, responseType: 'json', connectTimeout: Math.min(8000, options.timeoutMs || 8000), readTimeout: options.timeoutMs || 75000 });
         const payload = typeof response.data === 'string' ? safeJson(response.data, {}) : response.data;
         if (response.status < 200 || response.status >= 300) { const error = new Error(payload?.message || payload?.error || `电脑桥返回 ${response.status}`); error.status = response.status; error.code = payload?.error; throw error; }
         return payload;
@@ -304,16 +375,16 @@ class HttpAdapter {
     }
   }
   health() {
-    return this.request("/health");
+    return this.request("/health", { timeoutMs: 10000 });
   }
   async listThreads(archived = false) {
     let cursor = null; const rows = [];
-    do { const page = await this.request('/threads?limit=200&archived=' + archived + (cursor ? '&cursor=' + encodeURIComponent(cursor) : '')); rows.push(...extractRows(page, 'threads')); cursor = page.nextCursor; } while(cursor && rows.length < 1000);
+    do { const page = await this.request('/threads?limit=200&archived=' + archived + (cursor ? '&cursor=' + encodeURIComponent(cursor) : ''), { timeoutMs: 15000 }); rows.push(...extractRows(page, 'threads')); cursor = page.nextCursor; } while(cursor && rows.length < 1000);
     return rows.map(normalizeThread);
   }
   async getThread(id) {
     return normalizeThread(
-      await this.request(`/threads/${encodeURIComponent(id)}`),
+      await this.request(`/threads/${encodeURIComponent(id)}`, { timeoutMs: 30000 }),
     );
   }
   async createThread(options = {}) {
@@ -336,7 +407,7 @@ class HttpAdapter {
   artifact(id, fileId) { return this.request(`/threads/${encodeURIComponent(id)}/artifacts/${encodeURIComponent(fileId)}`); }
   upload(file) { return this.request('/uploads', { method: 'POST', body: JSON.stringify(file), timeoutMs: 90000 }); }
   async listApprovals() {
-    return extractRows(await this.request("/approvals"), "approvals");
+    return extractRows(await this.request("/approvals", { timeoutMs: 15000 }), "approvals");
   }
   approve(id, decision) {
     return this.request(`/approvals/${encodeURIComponent(id)}`, {
@@ -439,11 +510,13 @@ function connectionLabel() {
   return state.connection === "connected"
     ? "中转桥已连接"
     : state.connection === "offline"
-      ? "离线"
+      ? "离线 · 自动重连中"
+      : state.connection === 'unauthorized'
+        ? '电脑配对已失效 · 记录已保留'
       : state.config.mode === "demo"
         ? "演示模式"
         : state.config.baseUrl
-          ? "待连接"
+          ? "正在连接电脑…"
           : "需要配对";
 }
 function connectionClass() {
@@ -488,7 +561,7 @@ function renderHistory() {
   }).join('') || `<div class="history-empty">${query ? '没有找到匹配的对话' : '对话会留在这里，随时继续。'}</div>`;
 }
 function renderSettingsForm() {
-  return `<form class="settings-form" id="settings-form"><label>电脑地址<input name="baseUrl" value="${escapeHtml(state.config.baseUrl)}" placeholder="192.168.1.10:15731" inputmode="url" autocomplete="off" autocapitalize="none" /></label><label>6 位配对码<input name="code" placeholder="输入电脑上显示的配对码" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" /></label><details class="pair-advanced"><summary>粘贴配对信息 / 高级连接</summary><label>配对 JSON 或链接<textarea name="pair" rows="3" placeholder="粘贴电脑上复制的配对信息" autocomplete="off"></textarea></label><label>桥访问令牌<input name="token" value="${escapeHtml(state.config.token)}" placeholder="可选，用于已配置的桥" type="password" autocomplete="off" /></label></details><div class="settings-note">${icon('lock')} 配对信息仅保存在你的设备。模型密钥留在电脑。</div><button class="button primary pair-submit" type="submit" ${state.busy?'disabled':''}>${state.busy?'正在连接…':'连接电脑'} ${icon('chevron')}</button></form>`;
+  return `<form class="settings-form" id="settings-form"><label>电脑地址<input name="baseUrl" value="${escapeHtml(state.config.baseUrl)}" placeholder="192.168.1.10:15731" inputmode="url" autocomplete="off" autocapitalize="none" /></label><label>6 位配对码<input name="code" placeholder="输入电脑上显示的配对码" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" /></label><details class="pair-advanced"><summary>粘贴配对信息 / 高级连接</summary><label>配对 JSON 或链接<textarea name="pair" rows="3" placeholder="粘贴电脑上复制的配对信息" autocomplete="off"></textarea></label><label>桥访问令牌<input name="token" value="${escapeHtml(state.config.token)}" placeholder="可选，用于已配置的桥" type="password" autocomplete="off" /></label></details><div class="settings-note">${icon('lock')} 只需配对一次，重启或断网不会清除。聊天与文字草稿加密保存在手机，模型密钥留在电脑。</div><button class="button primary pair-submit" type="submit" ${state.busy?'disabled':''}>${state.busy?'正在连接…':'连接电脑'} ${icon('chevron')}</button></form>`;
 }
 const effortNames = { none: '关闭', minimal: '极简', low: '轻量', medium: '均衡', high: '深入', xhigh: '更深入', max: '极致', ultra: 'Ultra' };
 const requestId = () => window.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -524,11 +597,12 @@ function renderComposerExtras(main) {
   const errorBox = main.querySelector('.send-error');
   errorBox.hidden = !error;
   if (error) errorBox.innerHTML = `<span>${escapeHtml(error.message)}</span><button type="button" ${error.code === 'thread_storage_missing' ? 'data-recover-draft' : 'data-retry-send'} ${state.busy ? 'disabled' : ''}>${error.code === 'thread_storage_missing' ? '带入新对话' : '重试'}</button>`;
-  main.querySelector('.composer-foot').textContent = state.busy ? state.sendPhase || '正在发送…' : thread?.archived ? '已归档 · 可在对话选项中恢复' : thread?.status === 'active' ? 'Codex 正在处理，可查看结果或停止任务' : '与你的灵感，保持连接';
+  main.querySelector('.composer-foot').textContent = state.cacheError || (state.busy ? state.sendPhase || '正在发送…' : state.config.baseUrl && state.connection !== 'connected' ? '已保存的记录可离线查看 · 草稿保留，连上后再发送' : thread?.archived ? '已归档 · 可在对话选项中恢复' : thread?.status === 'active' ? 'Codex 正在处理，可查看结果或停止任务' : '与你的灵感，保持连接');
 }
 async function loadCapabilities() {
-  if (!state.config.baseUrl || state.config.mode === 'demo') return;
+  if (!state.config.baseUrl || state.config.mode === 'demo' || state.capabilitiesLoading) return;
   const epoch = state.epoch;
+  state.capabilitiesLoading = true;
   try {
     const capabilities = await adapter().capabilities();
     if (epoch !== state.epoch) return;
@@ -536,7 +610,8 @@ async function loadCapabilities() {
   } catch (error) {
     if (epoch !== state.epoch) return;
     state.capabilityError = error.status === 404 ? '请重启电脑桥，加载新版功能' : error.message;
-  }
+    state.capabilitiesAt = Date.now();
+  } finally { state.capabilitiesLoading = false; }
 }
 async function openSheet(kind) {
   if (state.busy) return;
@@ -626,7 +701,7 @@ async function uploadFiles(files, client) {
   return files.map(f => f.uploadId);
 }
 function renderSettings() {
-  return `<section class="settings-page"><div class="settings-heading"><span class="eyebrow">MAKE IT YOURS</span><h1>留一方，自己的天地。</h1><p>挑一种心境，继续你的灵感。</p></div><section class="settings-section"><h2>外观主题</h2><div class="theme-grid">${Object.entries(themes).map(([id, t]) => `<button class="theme-card" data-theme-choice="${id}" aria-pressed="${theme === id}"><span class="theme-swatch swatch-${id}"><i></i><b>${icon(id === 'dao' ? 'leaf' : id === 'stars' ? 'sparkle' : 'message')}</b></span><span class="theme-name">${t.name}<span class="theme-check">${icon('check')}</span></span><small>${t.label}</small></button>`).join('')}</div></section><section class="settings-section"><h2>连接电脑 <span class="settings-status ${connectionClass()}">${connectionLabel()}</span></h2><p class="section-note">沿用 cc-switch 配置。电脑与手机连接同一 Wi-Fi，或通过自己的 VPN 连接。</p>${renderSettingsForm()}${state.config.baseUrl ? '<button class="button subtle disconnect" data-clear>断开并清除配对</button>' : '<button class="button subtle demo-link" data-demo>先体验演示对话</button>'}</section><section class="settings-section"><h2>外出连接</h2><p class="section-note">可通过 Tailscale 等私人 VPN 跨网络使用。电脑与手机加入同一 VPN 后，把电脑地址改为 VPN 分配的 IP，保留端口 15731 和配对信息。无需登录 OpenAI 账户；VPN 需自行安装与连接。电脑需要保持开机并运行电脑桥。</p></section><section class="settings-section about"><h2>关于 Codex Pocket <small>1.3.0</small></h2><p>模型、推理强度与项目从电脑读取。手机可独立发送任务和审批，沿用电脑配置；已有桌面会话会交给当前窗口处理。电脑桥可在后台独立运行，无需打开 Codex 窗口；也不会自动弹出电脑会话。</p></section></section>`;
+  return `<section class="settings-page"><div class="settings-heading"><span class="eyebrow">MAKE IT YOURS</span><h1>留一方，自己的天地。</h1><p>挑一种心境，继续你的灵感。</p></div><section class="settings-section"><h2>外观主题</h2><div class="theme-grid">${Object.entries(themes).map(([id, t]) => `<button class="theme-card" data-theme-choice="${id}" aria-pressed="${theme === id}"><span class="theme-swatch swatch-${id}"><i></i><b>${icon(id === 'dao' ? 'leaf' : id === 'stars' ? 'sparkle' : 'message')}</b></span><span class="theme-name">${t.name}<span class="theme-check">${icon('check')}</span></span><small>${t.label}</small></button>`).join('')}</div></section><section class="settings-section"><h2>连接电脑 <span class="settings-status ${connectionClass()}">${connectionLabel()}</span></h2><p class="section-note">沿用 cc-switch 配置。电脑与手机连接同一 Wi-Fi，或通过自己的 VPN 连接。</p>${renderSettingsForm()}${state.config.baseUrl ? '<button class="button subtle disconnect" data-clear>清除本机配对与离线记录</button>' : '<button class="button subtle demo-link" data-demo>先体验演示对话</button>'}</section><section class="settings-section"><h2>外出连接</h2><p class="section-note">可通过 Tailscale 等私人 VPN 跨网络使用。电脑与手机加入同一 VPN 后，把电脑地址改为 VPN 分配的 IP，保留端口 15731 和配对信息。无需登录 OpenAI 账户；VPN 需自行安装与连接。电脑需要保持开机并运行电脑桥。</p></section><section class="settings-section about"><h2>关于 Codex Pocket <small>1.3.1</small></h2><p>模型、推理强度与项目从电脑读取。手机可独立发送任务和审批，沿用电脑配置；已有桌面会话会交给当前窗口处理。电脑桥可在后台独立运行，无需打开 Codex 窗口；也不会自动弹出电脑会话。</p></section></section>`;
 }
 let renderedThreadId = null, pageKey = '', messageMarkup = '', historyMarkup = '';
 let followMessages = true, composing = false, lastNativeAppearance = '';
@@ -704,6 +779,8 @@ function render() {
     history.scrollTop = scroll;
   }
   root.querySelector('.connection-text').innerHTML = `<i class="status-dot ${connectionClass()}"></i>${connectionLabel()}`;
+  const settingsStatus = root.querySelector('.settings-status');
+  if (settingsStatus) { settingsStatus.className = 'settings-status ' + connectionClass(); settingsStatus.textContent = connectionLabel(); }
   root.querySelectorAll('[data-history-mode]').forEach(button => button.setAttribute('aria-pressed', String((button.dataset.historyMode === 'archived') === state.historyArchived)));
   const drawer = root.querySelector('.history-drawer');
   drawer.hidden = !state.drawer;
@@ -735,29 +812,48 @@ async function refreshThread(id, a = adapter()) {
   const full = await a.getThread(id);
   if(epoch !== state.epoch) return;
   const i=state.threads.findIndex(t=>t.id===id);
-  if(i>=0) state.threads[i]={...full, archived: state.threads[i].archived};
+  if(i>=0) {
+    const previous = state.threads[i];
+    // A partial response during engine recovery must not erase saved messages.
+    state.threads[i]={...full, archived: previous.archived,
+      messages: full.historyIncomplete || (!full.messages.length && previous.messages.length) ? previous.messages : full.messages};
+  }
   attachApprovals();
+  saveHistory();
+}
+function connectionFailed(error) {
+  state.connection = error.status === 401 || error.status === 403 ? 'unauthorized' : 'offline';
+  state.failures++;
+  state.nextPoll = Date.now() + (state.connection === 'unauthorized' ? 60000 : Math.min(15000, 1500 * 2 ** Math.min(state.failures, 4)));
+  // Cached approval buttons must never be treated as current approvals.
+  state.approvals = []; attachApprovals();
 }
 async function syncThreads({quiet=false}={}) {
   if(state.syncing || state.busy || !state.config.baseUrl || state.config.mode==='demo') return;
-  if(quiet && (state.onboarding || state.screen==='settings')) return;
-  const epoch=state.epoch, selected=state.selectedId;
+  const epoch=state.epoch;
   state.syncing=true;
   try {
     const a=adapter();
     const [rows, approvals]=await Promise.all([a.listThreads(state.historyArchived),a.listApprovals()]);
-    if (Date.now() - state.capabilitiesAt > 60000) await loadCapabilities();
     if(epoch!==state.epoch) return;
     const previous=new Map(state.threads.map(t=>[t.id,t]));
-    state.threads=rows.map(t=>({...t,messages:previous.get(t.id)?.messages||[]}));
-    if(state.selectedId && !state.threads.some(t=>t.id===state.selectedId)) { state.selectedId=''; state.draft=state.drafts['']||''; }
+    for (const t of rows) previous.set(t.id, {...t, messages:previous.get(t.id)?.messages||[]});
+    state.threads=[...previous.values()];
     state.approvals=approvals.map(x=>({...x,id:String(x.id||x.approvalId),status:x.status||'pending'}));
-    if(state.selectedId) await refreshThread(state.selectedId,a);
+    // Load the last conversation immediately; keep other cached conversations intact.
+    if(state.selectedId) {
+      try { await refreshThread(state.selectedId,a); }
+      catch (error) { if (error.status !== 404 && error.code !== 'thread_storage_missing') throw error; }
+    }
     if(epoch!==state.epoch) return;
-    attachApprovals(); state.connection='connected'; state.lastSync=Date.now();state.failures=0;state.nextPoll=0;persistUi();
+    attachApprovals(); state.connection='connected'; state.lastSync=Date.now();state.failures=0;state.nextPoll=0;historyReady=true;persistUi();
+    if (Date.now() - state.capabilitiesAt > 60000) {
+      // Model discovery is optional; it must not hold up reconnecting or showing messages.
+      void loadCapabilities().then(() => { if(epoch===state.epoch) { saveHistory(); if(state.screen!=='settings')render(); } });
+    }
     if(!quiet) setToast(`已同步 ${rows.length} 个会话`);
-  } catch(e){state.connection='offline';state.failures++;state.nextPoll=Date.now()+Math.min(30000,3000*2**state.failures);if(!quiet)setToast('同步失败：'+e.message);}
-  finally {state.syncing=false;if(epoch===state.epoch && state.screen!=='settings')render();}
+  } catch(e){if(epoch!==state.epoch)return;connectionFailed(e);if(!quiet)setToast('暂时连不上电脑，记录和草稿已保留；会自动重连');}
+  finally {state.syncing=false;if(epoch===state.epoch)render();}
 }
 function attachApprovals(){
   for(const thread of state.threads) thread.messages=thread.messages.filter(m=>!m.id.startsWith('approval-'));
@@ -782,7 +878,11 @@ async function connectAndSave(form) {
     if(code) token=(await client.request('/pair',{method:'POST',body:JSON.stringify({code})})).token;
     const config={mode:'relay',baseUrl,token,project:''};
     const health=await new HttpAdapter(config).health();if(!health?.ok)throw new Error('电脑桥未就绪');
-    state.config=config;await saveCredentials();state.epoch++;state.threads=[];state.approvals=[];state.selectedId='';state.drafts={};state.draft='';resetExtras();
+    await saveHistory({ immediate: true });
+    state.config=config;await saveCredentials();state.epoch++;
+    const identity=await pairingIdentity(token);
+    if (identity!==historyIdentity) { state.threads=[];state.approvals=[];state.selectedId='';state.drafts={};state.draft='';resetExtras();lastHistory=''; }
+    historyIdentity=identity;historyReady=true;
     state.connection='connected';state.onboarding=false;state.screen='threads';persistUi();state.busy=false;
     await syncThreads({quiet:true});render();setToast('已连接你的电脑');
   }catch(e){state.config=previous;setToast('连接失败：'+e.message);}
@@ -795,7 +895,7 @@ function createThread() {
   state.screen = 'threads'; state.drawer = false; state.onboarding = false;
   state.epoch++; state.sheet = ''; state.sheetThreadId = null;
   state.sendError = null; state.projectChoice = null;
-  if (state.historyArchived) { state.historyArchived = false; state.threads = []; syncThreads({ quiet: true }); }
+  if (state.historyArchived) { state.historyArchived = false; syncThreads({ quiet: true }); }
   followMessages = true; persistUi(); render();
   openSheet('project');
 }
@@ -806,6 +906,12 @@ async function sendMessage(form) {
   if (!text && !files.length) return;
   if (!state.config.baseUrl && state.config.mode !== 'demo') {
     setToast('先连接电脑，即可发送这条消息'); setScreen('settings'); return;
+  }
+  if (state.config.mode !== 'demo' && state.connection !== 'connected') {
+    state.draft = form.querySelector('textarea').value; state.drafts[state.selectedId] = state.draft;
+    await saveHistory({ immediate: true });
+    setToast('草稿已保留，正在重连电脑；连上后点击发送');
+    void syncThreads({ quiet: true }); return;
   }
   if (state.config.mode !== 'demo' && state.capabilities && !state.capabilities.sameThreadSending) {
     setToast('请先在电脑双击 Restart-Pocket.cmd，加载新版电脑连接'); return;
@@ -837,7 +943,12 @@ async function sendMessage(form) {
     for (const file of files) if (file.preview) URL.revokeObjectURL(file.preview);
     if (state.config.mode !== 'demo') {
       const t = state.threads.find(t => t.id === id);
-      if (t) { t.status = 'active'; t.owner = result.transport === 'bridge' ? 'bridge' : 'desktop'; if (options.model) t.model = options.model; if (options.effort) t.reasoningEffort = options.effort; }
+      if (t) {
+        t.status = 'active'; t.owner = result.transport === 'bridge' ? 'bridge' : 'desktop'; if (options.model) t.model = options.model; if (options.effort) t.reasoningEffort = options.effort;
+        // Preserve acknowledged messages even when the next read loses its connection.
+        t.messages.push(normalizeMessage({id:'sent-'+retry.requestId,role:'user',text:text+(files.length?'\n附件：'+files.map(f=>f.name).join('、'):''),time:Date.now()}));
+      }
+      await saveHistory({ immediate: true });
       try { await refreshThread(id); } catch { setToast('消息已送达，等待同步回复'); }
     }
   } catch (e) {
@@ -889,7 +1000,7 @@ async function switchHistory(archived) {
   state.drafts[state.selectedId] = state.draft;
   state.historyArchived = archived; state.selectedId = ''; state.draft = state.drafts[''] || '';
   state.epoch++; state.sheet = ''; state.sheetThreadId = null; state.sendError = null;
-  if (state.config.mode !== 'demo') state.threads = [];
+  persistUi();
   render();
   await syncThreads({ quiet: true });
 }
@@ -916,7 +1027,7 @@ async function archiveConversation(id) {
       state.drafts[id] = state.draft; state.selectedId = ''; state.draft = state.drafts[''] || '';
       state.sheet = ''; state.sheetThreadId = null; state.sendError = null;
     }
-    if (state.config.mode !== 'demo') state.threads = state.threads.filter(t => t.id !== id);
+    persistUi();
     setToast(archived ? '已归档，可在「已归档」中恢复' : '已恢复到对话列表');
   } catch (error) { setToast('操作未完成：' + error.message); }
   finally { state.busy = false; render(); }
@@ -1016,15 +1127,16 @@ function bindEvents() {
     } else if (el.matches('[data-close-sheet]')) closeSheet();
     else if (el.matches('[data-model-picker]')) openSheet('model');
     else if (el.matches('[data-project-picker]')) openSheet('project');
-    else if (el.matches('[data-follow-model]')) { delete state.selections[state.selectedId]; render(); }
+    else if (el.matches('[data-follow-model]')) { delete state.selections[state.selectedId]; saveHistory(); render(); }
     else if (el.matches('[data-choose-model]')) {
       const model = state.capabilities.models.find(m => m.id === el.dataset.chooseModel);
-      state.selections[state.selectedId] = { model: model.id, effort: model.defaultEffort }; render();
+      state.selections[state.selectedId] = { model: model.id, effort: model.defaultEffort }; saveHistory(); render();
     } else if (el.matches('[data-choose-effort]')) {
-      state.selections[state.selectedId] = { ...currentOptions(), effort: el.dataset.chooseEffort }; render();
+      state.selections[state.selectedId] = { ...currentOptions(), effort: el.dataset.chooseEffort }; saveHistory(); render();
     } else if (el.matches('[data-project-index]')) {
       const project = state.capabilities?.projects[Number(el.dataset.projectIndex)];
       state.projectChoice = project ? { name: project.name, projectId: project.id, cwd: project.paths[Number(el.dataset.rootIndex)] } : null;
+      saveHistory();
       closeSheet();
     } else if (el.matches('[data-attach]')) document.querySelector('#attachment-input').click();
     else if (el.matches('[data-remove-file]')) {
@@ -1049,7 +1161,9 @@ function bindEvents() {
       state.draft=state.drafts[state.selectedId]||''; state.drawer=false; state.screen='threads';
       followMessages=true; persistUi(); render();
       if (state.config.mode !== 'demo' && state.config.baseUrl) {
-        try { await refreshThread(state.selectedId); render(); } catch(error) { setToast('读取会话失败：'+error.message); }
+        const epoch = state.epoch;
+        try { await refreshThread(state.selectedId); render(); }
+        catch(error) { if(epoch!==state.epoch)return;connectionFailed(error); render(); if(!selectedThread()?.messages.length)setToast('这条对话尚未保存在手机，联网后会自动读取'); }
       }
     } else if (el.matches('[data-theme-choice]')) {
       theme=el.dataset.themeChoice; localStorage.setItem(THEME_KEY,theme); applyTheme();
@@ -1081,6 +1195,7 @@ function bindEvents() {
   document.addEventListener('input', e => {
     if(e.target.id==='composer-input') {
       state.draft=e.target.value;state.drafts[state.selectedId]=state.draft;
+      saveHistory();
       resizeComposer(e.target);
       document.querySelector('.send-button').disabled=state.busy||(!state.draft.trim()&&!currentFiles().length);
     } else if(e.target.id==='history-search') {
@@ -1091,7 +1206,7 @@ function bindEvents() {
     if (e.target.id === 'attachment-input') { addFiles(e.target.files); e.target.value = ''; }
   });
   document.addEventListener('compositionstart', e => {if(e.target.id==='composer-input')composing=true;});
-  document.addEventListener('compositionend', e => {if(e.target.id==='composer-input'){composing=false;state.draft=e.target.value;state.drafts[state.selectedId]=state.draft;}});
+  document.addEventListener('compositionend', e => {if(e.target.id==='composer-input'){composing=false;state.draft=e.target.value;state.drafts[state.selectedId]=state.draft;saveHistory();}});
   document.addEventListener('keydown', e => {
     if(e.key==='Escape') {if(previewState)closePreview();else if(state.sheet)closeSheet();else if(state.drawer)closeDrawer();else if(state.screen==='settings')setScreen('threads');}
     if(e.target.id==='composer-input' && (e.metaKey||e.ctrlKey) && e.key==='Enter' && !e.isComposing) {e.preventDefault();e.target.form.requestSubmit();}
@@ -1129,18 +1244,25 @@ async function boot() {
       token: pair.token,
       mode: "relay",
     });
+  await loadHistory();
   state.onboarding = false;
   bindEvents(); applyTheme(); updateViewport(); render();
-  if (state.config.baseUrl && state.config.mode !== "demo") {
-    await syncThreads({ quiet: true });
-    if (!state.threads.length && state.connection === "connected") setToast("桥已连接，可以新建会话");
-  }
+  const reconnect = () => { state.nextPoll = 0; void syncThreads({ quiet: true }); };
   document.addEventListener("visibilitychange", () => {
-    if (!document.hidden) syncThreads({ quiet: true });
+    if (!document.hidden) reconnect();
+    else saveHistory({ immediate: true });
   });
-  window.addEventListener("online", () => syncThreads({ quiet: true }));
+  window.addEventListener('pocketResume', reconnect);
+  window.addEventListener('pocketPause', () => saveHistory({ immediate: true }));
+  window.addEventListener('pagehide', () => saveHistory({ immediate: true }));
+  window.addEventListener("online", reconnect);
+  window.addEventListener('offline', () => {
+    if (!state.config.baseUrl || state.config.mode === 'demo') return;
+    connectionFailed({}); saveHistory({ immediate: true }); render();
+  });
   setInterval(() => {
     if (!document.hidden && Date.now()>=state.nextPoll) syncThreads({ quiet: true });
   }, 3000);
+  reconnect();
 }
 boot();

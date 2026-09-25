@@ -13,6 +13,24 @@ import com.getcapacitor.BridgeActivity;
 public class MainActivity extends BridgeActivity {
     private OnBackPressedCallback overlayBack;
 
+    private void dispatchLifecycle(String name) {
+        if (bridge != null && bridge.getWebView() != null) {
+            bridge.getWebView().evaluateJavascript("window.dispatchEvent(new Event('" + name + "'))", null);
+        }
+    }
+
+    @Override
+    public void onResume() {
+        super.onResume();
+        dispatchLifecycle("pocketResume");
+    }
+
+    @Override
+    public void onPause() {
+        dispatchLifecycle("pocketPause");
+        super.onPause();
+    }
+
     public void setOverlayOpen(boolean open) {
         if (overlayBack != null) overlayBack.setEnabled(open);
     }

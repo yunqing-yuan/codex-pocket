@@ -14,6 +14,15 @@ try {
     }
 } catch { }
 $nodeExe = Join-Path $projectRoot 'node.exe'
+if (-not (Test-Path -LiteralPath $nodeExe)) {
+    $settingsPath = Join-Path $projectRoot 'runtime\background.json'
+    if (Test-Path -LiteralPath $settingsPath) {
+        try {
+            $savedNode = (Get-Content -LiteralPath $settingsPath -Raw | ConvertFrom-Json).node
+            if ($savedNode -and (Test-Path -LiteralPath $savedNode -PathType Leaf)) { $nodeExe = $savedNode }
+        } catch { }
+    }
+}
 if (-not (Test-Path -LiteralPath $nodeExe)) { $nodeExe = (Get-Command node -ErrorAction Stop).Source }
 $runtimePath = Join-Path $projectRoot 'runtime'
 New-Item -ItemType Directory -Force -Path $runtimePath | Out-Null
