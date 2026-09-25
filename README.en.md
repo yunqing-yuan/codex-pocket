@@ -42,6 +42,8 @@ Requirements: **Android 8+**, **Windows**, **Node.js 20/22 LTS**, and a working 
 
 Keep the computer awake and both Codex and the bridge running. Allow Node.js through Windows Firewall on the appropriate private network. To share the app, distribute the APK and the complete bridge ZIP; a launcher script alone is insufficient. Each user configures their own provider and pairs with their own computer. Never share an existing `runtime/` folder.
 
+If connecting only works with Windows Firewall disabled, re-enable it, mark your own trusted Wi-Fi / phone hotspot as a **Private** network, and right-click `Fix-Firewall.cmd` → **Run as administrator**. The helper allows TCP 15731 only for the bridge's Node.js executable, Private networks and the local subnet. It reports existing Node.js block rules, which override allow rules. It does not change those blocks or create VPN rules. To remove its exception, run `Fix-Firewall.ps1 -Remove` from an elevated PowerShell.
+
 ## Privacy and transport
 
 The phone communicates with your bridge, which communicates locally with Codex. Model keys remain in the computer's provider configuration. The app stores bridge credentials using Android Keystore and AES-GCM; app backup is disabled. Conversations and attachments sent to your model provider remain subject to that provider's policies.
