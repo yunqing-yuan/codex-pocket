@@ -13,13 +13,19 @@ try {
     }
 
     $ruleName = "CodexPocket-Private-TCP-$Port"
+    $discoveryRule = "CodexPocket-Private-UDP-$Port"
     $ruleGroup = 'Codex Pocket'
     $existing = Get-NetFirewallRule -PolicyStore PersistentStore -Name $ruleName -ErrorAction SilentlyContinue
     if ($existing -and $existing.Group -ne $ruleGroup) {
         throw '存在同名的其他防火墙配置，未修改任何规则。'
     }
+    $existingDiscovery = Get-NetFirewallRule -PolicyStore PersistentStore -Name $discoveryRule -ErrorAction SilentlyContinue
+    if ($existingDiscovery -and $existingDiscovery.Group -ne $ruleGroup) {
+        throw '存在同名的其他设备发现配置，未修改任何规则。'
+    }
     if ($Remove) {
         if ($existing) { $existing | Remove-NetFirewallRule }
+        if ($existingDiscovery) { $existingDiscovery | Remove-NetFirewallRule }
         Write-Host '已移除 Pocket 的防火墙放行规则。'
         exit 0
     }
@@ -67,7 +73,15 @@ try {
         New-NetFirewallRule -PolicyStore PersistentStore -Name $ruleName -DisplayName "Codex Pocket (Private LAN TCP $Port)" -Group $ruleGroup @settings | Out-Null
     }
 
-    Write-Host "已配置：仅放行电脑桥的 Node.js / TCP $Port / 专用网络 / 本地子网。"
+    $settings.Protocol = 'UDP'
+    $settings.Description = 'Discover the paired Pocket bridge from the local subnet on trusted private networks.'
+    if ($existingDiscovery) {
+        Set-NetFirewallRule -PolicyStore PersistentStore -Name $discoveryRule @settings | Out-Null
+    } else {
+        New-NetFirewallRule -PolicyStore PersistentStore -Name $discoveryRule -DisplayName "Codex Pocket (Private LAN UDP $Port)" -Group $ruleGroup @settings | Out-Null
+    }
+
+    Write-Host "已配置：仅放行电脑桥的 Node.js / TCP 和 UDP $Port / 专用网络 / 本地子网。"
     Write-Host '请保持 Windows 防火墙开启。配对管理端口 15732 未开放。'
     Write-Host ''
     Write-Host '当前网络（Private = 专用，Public = 公用）：'

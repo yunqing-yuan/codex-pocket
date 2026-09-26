@@ -1,3 +1,4 @@
+param([switch]$Background)
 $ErrorActionPreference = 'Stop'
 $projectRoot = $PSScriptRoot
 $listener = Get-NetTCPConnection -LocalPort 15732 -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -25,4 +26,4 @@ if ($listener) {
     Stop-Process -Id $worker.ProcessId -Force -ErrorAction SilentlyContinue
     Start-Sleep -Milliseconds 500
 }
-& (Join-Path $projectRoot 'Start-Pocket.ps1')
+& (Join-Path $projectRoot 'Start-Pocket.ps1') -Background:$Background

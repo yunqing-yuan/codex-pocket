@@ -97,6 +97,7 @@ input,textarea{outline:none;min-width:0}
 .connect-hint{font-size:12px;min-height:44px;color:var(--accent);margin-top:20px}
 .conversation-start{font-size:10px;letter-spacing:.07em;text-align:center;color:var(--hint);padding:4px 0 24px}
 .message{margin:0 0 27px;min-width:0}
+.load-earlier{display:block;margin:0 auto 20px;padding:10px 18px;border-radius:12px;background:var(--soft);color:var(--accent);font-size:12px}
 .message-meta{display:flex;align-items:center;gap:7px;color:var(--muted);font-size:11px;margin-bottom:9px}
 .message-meta time{font-size:10px;color:var(--hint);margin-left:auto}
 .avatar{display:grid;place-items:center;width:22px;height:22px;background:var(--soft);border-radius:8px;font-size:10px;font-weight:600;color:var(--accent)}

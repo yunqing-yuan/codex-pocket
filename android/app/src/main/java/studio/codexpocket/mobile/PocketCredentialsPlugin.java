@@ -30,23 +30,27 @@ public class PocketCredentialsPlugin extends Plugin {
     private static final byte[] AAD = ALIAS.getBytes(StandardCharsets.UTF_8);
     private static final byte[] HISTORY_AAD = (ALIAS + ".history").getBytes(StandardCharsets.UTF_8);
 
-    private AtomicFile historyFile() {
-        return new AtomicFile(new File(getContext().getFilesDir(), "pocket-history.enc"));
+    private AtomicFile historyFile(String bucket) {
+        return new AtomicFile(new File(getContext().getFilesDir(), "drafts".equals(bucket) ? "pocket-drafts.enc" : "pocket-history.enc"));
+    }
+
+    private byte[] cacheAAD(String bucket) {
+        return "drafts".equals(bucket) ? (ALIAS + ".drafts").getBytes(StandardCharsets.UTF_8) : HISTORY_AAD;
     }
 
     @PluginMethod
     public synchronized void saveHistory(PluginCall call) {
         FileOutputStream output = null;
-        AtomicFile file = historyFile();
+        String bucket = call.getString("bucket", "history");
+        AtomicFile file = historyFile(bucket);
         try {
             String value = call.getString("value");
             if (value == null) throw new IllegalArgumentException("Missing history");
             byte[] plain = value.getBytes(StandardCharsets.UTF_8);
             if (plain.length > 64 * 1024 * 1024) throw new IllegalArgumentException("History exceeds 64 MiB");
-            new JSONObject(value);
             Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
             cipher.init(Cipher.ENCRYPT_MODE, encryptionKey());
-            cipher.updateAAD(HISTORY_AAD);
+            cipher.updateAAD(cacheAAD(bucket));
             byte[] encrypted = cipher.doFinal(plain);
             output = file.startWrite();
             output.write(cipher.getIV());
@@ -63,7 +67,8 @@ public class PocketCredentialsPlugin extends Plugin {
     public synchronized void loadHistory(PluginCall call) {
         try {
             JSObject result = new JSObject();
-            AtomicFile file = historyFile();
+            String bucket = call.getString("bucket", "history");
+            AtomicFile file = historyFile(bucket);
             // openRead recovers an interrupted AtomicFile replacement.
             if (!file.getBaseFile().exists() && !new File(file.getBaseFile() + ".bak").exists()) {
                 result.put("value", JSONObject.NULL);
@@ -74,7 +79,7 @@ public class PocketCredentialsPlugin extends Plugin {
                 if (key == null) throw new IllegalStateException("History key unavailable");
                 Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
                 cipher.init(Cipher.DECRYPT_MODE, key, new GCMParameterSpec(128, Arrays.copyOfRange(bytes, 0, 12)));
-                cipher.updateAAD(HISTORY_AAD);
+                cipher.updateAAD(cacheAAD(bucket));
                 result.put("value", new String(cipher.doFinal(bytes, 12, bytes.length - 12), StandardCharsets.UTF_8));
             }
             call.resolve(result);
@@ -159,7 +164,8 @@ public class PocketCredentialsPlugin extends Plugin {
     public synchronized void clear(PluginCall call) {
         try {
             if (!preferences().edit().clear().commit()) throw new IllegalStateException("Credential removal failed");
-            historyFile().delete();
+            historyFile("history").delete();
+            historyFile("drafts").delete();
             keyStore().deleteEntry(ALIAS);
             call.resolve();
         } catch (Exception error) {

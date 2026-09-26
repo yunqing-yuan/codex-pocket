@@ -44,7 +44,7 @@ Keep the computer awake, signed in and the bridge running; the screen may be loc
 
 Version 1.3 adds chat archive/restore, hides structured reasoning items, and provides previews and Android sharing for files linked or modified within the conversation's project. HTML previews isolate content and disable external networking; complex modules and server-dependent sites may not work. Background turns release ownership on completion so the desktop can resume the same thread afterward. Existing desktop owners receive messages through IPC. Pocket never automatically opens or focuses a desktop chat; an already-open conversation may still display synchronized content, so lock your screen for privacy.
 
-If connecting only works with Windows Firewall disabled, re-enable it, mark your own trusted Wi-Fi / phone hotspot as a **Private** network, and right-click `Fix-Firewall.cmd` → **Run as administrator**. The helper allows TCP 15731 only for the bridge's Node.js executable, Private networks and the local subnet. It reports existing Node.js block rules, which override allow rules. It does not change those blocks or create VPN rules. To remove its exception, run `Fix-Firewall.ps1 -Remove` from an elevated PowerShell.
+If connecting only works with Windows Firewall disabled, re-enable it, mark your own trusted Wi-Fi / phone hotspot as a **Private** network, and right-click `Fix-Firewall.cmd` → **Run as administrator**. The helper allows TCP/UDP 15731 only for the bridge's Node.js executable, Private networks and the local subnet. It reports existing Node.js block rules, which override allow rules. It does not change those blocks or create VPN rules. To remove its exception, run `Fix-Firewall.ps1 -Remove` from an elevated PowerShell.
 
 ## Privacy and transport
 
@@ -61,7 +61,7 @@ The bridge stores its access token in `runtime/pairing.json` and attachments in 
 - Android 8 / API 26 minimum, with a working System WebView. No iOS package.
 - Windows is the supported distribution path. Full macOS/Linux workflows are unverified.
 - Development used Codex Windows `26.917.9434.0`. Same-thread sending uses an internal desktop IPC protocol that may change with desktop updates.
-- The `1.3.2` APK uses debug signing and is a preview, not a store release.
+- The `1.3.3` APK uses debug signing and is a preview, not a store release.
 - No claim of exhaustive device testing or an independent security audit. A user confirmed synchronization over mobile data through Tailscale; campus networks remain unverified.
 - No built-in document parser, background push notifications, automatic public tunnel, or per-user access isolation.
 

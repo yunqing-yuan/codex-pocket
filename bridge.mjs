@@ -17,6 +17,7 @@ import { homedir } from "node:os";
 import { MAX_FILE_BYTES, saveUpload, messageInput, resolveUploads } from "./bridge/uploads.mjs";
 import { DesktopIpc } from './bridge/desktop-ipc.mjs';
 import { listArtifacts, readArtifact } from './bridge/artifacts.mjs';
+import { connectionProof, startDiscovery } from './bridge/discovery.mjs';
 import {
   approvalDecision,
   mapItems,
@@ -371,7 +372,7 @@ class CodexBridge extends EventEmitter {
       pid: this.child.pid,
       initialized: true,
       executable: basename(this.executable),
-      version: '1.3.2',
+      version: '1.3.3',
       sameThreadSending: true,
       backgroundExecution: true,
     };
@@ -835,6 +836,12 @@ export function createBridgeServer({
       res.end();
       return;
     }
+    if (req.method === 'GET' && req.url?.startsWith('/pocket/identity?')) {
+      const nonce = new URL(req.url, 'http://localhost').searchParams.get('nonce');
+      const answer = connectionProof(token, nonce, server.address()?.port || listenPort);
+      send(res, req, answer ? 200 : 400, answer || { error: 'invalid_nonce' });
+      return;
+    }
     if (publicHandler && (await publicHandler(req, res, corsHeaders(req))))
       return;
     if (!authorized(req, token)) {
@@ -994,6 +1001,7 @@ export function createBridgeServer({
   });
   server.on("close", () => clearInterval(heartbeat));
   server.listen(listenPort, listenHost);
+  server.once('listening', () => startDiscovery(server, token, server.address().port, listenHost));
   return { server, bridge: activeBridge, token, port: listenPort };
 }
 

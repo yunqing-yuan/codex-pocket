@@ -12,6 +12,8 @@ import com.getcapacitor.BridgeActivity;
 
 public class MainActivity extends BridgeActivity {
     private OnBackPressedCallback overlayBack;
+    private android.net.ConnectivityManager networkManager;
+    private android.net.ConnectivityManager.NetworkCallback networkCallback;
 
     private void dispatchLifecycle(String name) {
         if (bridge != null && bridge.getWebView() != null) {
@@ -39,7 +41,17 @@ public class MainActivity extends BridgeActivity {
     public void onCreate(Bundle savedInstanceState) {
         registerPlugin(PocketCredentialsPlugin.class);
         registerPlugin(PocketUIPlugin.class);
+        registerPlugin(PocketNetworkPlugin.class);
         super.onCreate(savedInstanceState);
+        networkManager = (android.net.ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
+        networkCallback = new android.net.ConnectivityManager.NetworkCallback() {
+            private void changed() { runOnUiThread(() -> dispatchLifecycle("pocketNetwork")); }
+            @Override public void onAvailable(android.net.Network network) { changed(); }
+            @Override public void onLost(android.net.Network network) { changed(); }
+            @Override public void onLinkPropertiesChanged(android.net.Network network, android.net.LinkProperties properties) { changed(); }
+        };
+        try { networkManager.registerDefaultNetworkCallback(networkCallback); }
+        catch (Exception ignored) { networkCallback = null; }
         WindowCompat.setDecorFitsSystemWindows(getWindow(), true);
         getWindow().setStatusBarColor(Color.rgb(245, 243, 236));
         getWindow().setNavigationBarColor(Color.rgb(245, 243, 236));
@@ -70,5 +82,13 @@ public class MainActivity extends BridgeActivity {
                 "window.dispatchEvent(new CustomEvent('pocketViewport',{detail:{height:" +
                 (b - t) + "/window.devicePixelRatio,keyboardVisible:" + keyboard + "}}))", null);
         });
+    }
+
+    @Override
+    public void onDestroy() {
+        if (networkCallback != null) {
+            try { networkManager.unregisterNetworkCallback(networkCallback); } catch (Exception ignored) { }
+        }
+        super.onDestroy();
     }
 }

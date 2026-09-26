@@ -16,9 +16,9 @@
 
 | 设备 | 文件 | 用途 |
 | --- | --- | --- |
-| 电脑 | [Codex-Pocket-Bridge.zip](https://github.com/yunqing-yuan/codex-pocket/releases/download/v1.3.2-bridge.1/Codex-Pocket-Bridge.zip) | 解压后运行连接向导和后台电脑桥 |
+| 电脑 | [Codex-Pocket-Bridge.zip](https://github.com/yunqing-yuan/codex-pocket/releases/download/v1.3.3/Codex-Pocket-Bridge.zip) | 解压后运行连接向导和后台电脑桥 |
 | 电脑 | [tailscale-setup-1.102.4.exe](https://github.com/yunqing-yuan/codex-pocket/releases/download/v1.3.2/tailscale-setup-1.102.4.exe) | 安装 Windows Tailscale |
-| 手机 | [Codex-Pocket.apk](https://github.com/yunqing-yuan/codex-pocket/releases/download/v1.3.2-bridge.1/Codex-Pocket.apk) | 手机聊天 App；已安装 1.3.2 的无需重装 |
+| 手机 | [Codex-Pocket.apk](https://github.com/yunqing-yuan/codex-pocket/releases/download/v1.3.3/Codex-Pocket.apk) | 手机聊天 App；旧版本直接覆盖安装，保留配对与离线记录 |
 | 手机 | [tailscale-android-universal-1.102.4.apk](https://github.com/yunqing-yuan/codex-pocket/releases/download/v1.3.2/tailscale-android-universal-1.102.4.apk) | 安装 Android Tailscale |
 
 上述 Tailscale 文件为用户提供的第三方安装包镜像；也可使用 [Tailscale 官方下载](https://tailscale.com/download)。Tailscale 文件校验值见 [Tailscale-SHA256SUMS.txt](https://github.com/yunqing-yuan/codex-pocket/releases/download/v1.3.2/Tailscale-SHA256SUMS.txt)。
@@ -87,6 +87,23 @@ Android 通常只能同时使用一个 VPN。如果其他代理或加速器正�
 本次修复后，已在 Windows 电脑完成第 3、4 步并检查专用访问规则，用户确认手机切到移动数据后可同步。此结果不代表已覆盖所有手机或校园网。
 
 ## 以后每天怎么用
+
+### 远程与热点自动切换
+
+需同时更新 **1.3.3 手机 App 和电脑桥**；旧 App 请直接覆盖安装，不要卸载。电脑覆盖程序文件并保留 `runtime`，任务结束后运行 `Restart-Pocket.cmd`。
+
+第一次启用本地切换：
+
+1. 电脑连上自己的手机热点或可信 Wi-Fi。
+2. Windows「设置 → 网络和 Internet → 当前连接属性」将**这一个可信网络**设为「专用」。公共场所不可信网络保留「公用」。
+3. 右键桥目录的 `Fix-Firewall.cmd` → 以管理员身份运行。新版仅允许电脑桥程序在专用网络、本地子网使用 TCP／UDP 15731；原远程 Tailscale 规则保留。
+4. 手机保持原配对，打开 Pocket。App 会寻找同一台已配对电脑，地址自动更新，无需重输配对码。
+
+以后远程使用时开启手机 Tailscale；切回自己的热点时可以关闭手机 Tailscale，电脑连接热点后等待 App 自动重连。电脑 Tailscale 可以一直开着。返回远程时重新开启手机 Tailscale即可。切换期间聊天和草稿保留，**发送中的消息不会自动重发**；提示失败时确认状态后手动重试。
+
+App 会先尝试已保存地址，再通过本地 UDP 广播发现变化后的地址。发现包不包含令牌，电脑用配对密钥签名随机挑战，手机确认身份后才连接。不需要位置、联系人或文件访问权限。
+
+新热点可能被 Windows 当成新的「公用网络」，需要首次设为专用。若手机系统屏蔽热点广播或路由器开启设备隔离，自动发现可能失败：可手动填电脑配对页的局域网地址，或保持手机 Tailscale 开启。不同 Android 机型的热点发现仍需实机确认。
 
 电脑首次双击一次 **`Enable-Background.cmd`**，以后登录 Windows 后会自动启动电脑桥和守护。电脑需开机、已经登录、保持唤醒，可以锁屏；重启后尚未登录 Windows 时，当前用户启动项还没有启动。
 

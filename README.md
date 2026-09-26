@@ -89,7 +89,7 @@ flowchart LR
 | Android | 最低 Android 8 / API 26，需可用的 Android System WebView；未覆盖全部机型 |
 | 电脑 | Windows 为当前交付路径；macOS / Linux 未验证完整流程 |
 | 桌面集成 | 开发时使用 Codex Windows `26.917.9434.0`；同会话发送依赖内部 IPC，桌面更新可能影响兼容性 |
-| APK | `1.3.2`，versionCode `8`，debug 签名的预览包；不是应用商店正式发行版 |
+| APK | `1.3.3`，versionCode `9`，debug 签名的预览包；不是应用商店正式发行版 |
 | 推理与审批 | 取决于电脑版本、模型服务、会话状态和可同步的审批类型 |
 | 远程网络 | 通过向导配置 Tailscale；已有用户确认手机移动数据下同步成功，校园网仍需实际验证 |
 | 多设备 | 共用电脑桥权限，无独立账号或单设备令牌吊销；适合个人自用 |
