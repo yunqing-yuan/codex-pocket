@@ -62,7 +62,7 @@ The bridge stores its access token in `runtime/pairing.json` and attachments in 
 - Windows is the supported distribution path. Full macOS/Linux workflows are unverified.
 - Development used Codex Windows `26.917.9434.0`. Same-thread sending uses an internal desktop IPC protocol that may change with desktop updates.
 - The `1.3.2` APK uses debug signing and is a preview, not a store release.
-- No claim of exhaustive device testing or an independent security audit. Cross-network device usage has not been comprehensively validated.
+- No claim of exhaustive device testing or an independent security audit. A user confirmed synchronization over mobile data through Tailscale; campus networks remain unverified.
 - No built-in document parser, background push notifications, automatic public tunnel, or per-user access isolation.
 
 ## Build

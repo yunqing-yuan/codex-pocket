@@ -1,51 +1,125 @@
-# 不同网络连接：配置向导
+# 手机和电脑不在同一个网络：一步一步连接
 
-本功能在 1.3.0 的体验改进交付之后提供。使用 **Tailscale 私人网络**，电脑无需公网 IP 或路由器端口映射。手机仍使用 Codex Pocket App；Tailscale 负责连接两台设备，不替代模型服务或 cc-switch。
+适用：Windows 电脑 + Android 手机 + Codex Pocket。手机安装 Pocket 和 Tailscale 两个 App；电脑安装 Tailscale 并运行电脑桥。电脑上的 Codex 需已配置可用的模型服务，Pocket 沿用原配置。
 
-## 第一次：电脑双击一次，手机完成登录
+## 先理解这次为什么没有第 3 步
 
-1. 完整解压电脑桥，双击 **`Setup-Remote.cmd`**。
-2. 向导检测 Tailscale；未安装时通过 Windows winget 安装。没有 winget 的电脑会打开官方下载页，安装后重新运行向导。
-3. 首次按提示登录 Tailscale，使用自己的账号。手机安装 [Tailscale Android](https://tailscale.com/download/android)，登录同一账号，并允许系统 VPN 请求。
-4. 向导后台启动电脑桥，并请求管理员权限设置**只限 Tailscale 网卡和地址、TCP 15731、Tailscale 来源网段**的入站规则。它不改默认路由、不配置出口节点、不打开公网隧道，也不替换既有 VPN 配置。
-5. 在 Pocket「设置与配对」填写向导显示的 `100.x.x.x:15731` 地址和一次性配对码。以后连接时，两端 Tailscale 都需保持在线。
-6. 外出前，将手机从 Wi-Fi 切换到移动数据，确认能同步会话。需要电脑桥登录后自动运行时，双击 `Enable-Background.cmd`。
+旧向导在第 2 步运行 `tailscale up --timeout=60s`。如果浏览器登录、设备授权或连接过程超过 60 秒，它就把等待超时当作失败，退出向导，因此不会显示第 3、4 步。
 
-首次登录、VPN 系统授权和管理员权限不能由工具替用户绕过。向导不会把账号、配对码或令牌写入新配置文件；仍沿用原桥的配对存储。它不改变模型服务账号。
+网页 Machines 列表表示账号登记过哪些设备，不等于设备此刻正在连接。灰点和「Last seen / 最后出现时间」需要结合客户端状态判断；电脑上的 Tailscale 服务运行、网卡显示 Up，也不代表账号认证已完成。
 
-## 校园网与兼容范围
+新版电脑桥（1.3.2-bridge.1）按客户端实际状态继续：启动连接命令超时后重新读取状态，登录完成后自动进入下一步。等待约 3 分钟仍未完成，会保留在第 2 步，让你按 Enter 继续检查、输入 R 重新请求连接或 Q 退出。没有清除账号或重置已有路由设置。
 
-Tailscale 优先直连；无法直连时可使用加密 DERP 中继，官方文档说明中继使用 TCP 443。因此许多 NAT/UDP 较严格的网络仍可用，但如果学校阻止 Tailscale、登录服务、中继服务或 VPN，本工具不能保证连接，也不绕过学校策略。先完成校园网自己的认证。
+本次还修复了 Windows PowerShell 5.1 在管理员窗口读取含中文账号名称的 Tailscale 状态时，按旧代码页解码导致 JSON 解析失败的问题。新版直接按 UTF-8 读取，并将第 4 步的具体错误带回主窗口，不再只显示笼统的「访问规则未配置」。
 
-Android 通常只能同时启用一个 VPN。若另一个代理/VPN 正在占用系统 VPN，请先停用它，再打开 Tailscale；不要把 Pocket 排除在 Tailscale 的应用路由之外。电脑上的其他 VPN 或使用 `100.64.0.0/10` 的网络也可能冲突。
+## 第一次需要下载什么
 
-向导针对 Tailscale 默认 IPv4 地址和电脑桥默认端口。自定义地址池、Headscale、组织 ACL、设备审批、设备密钥过期或第三方防火墙，需要按各自管理策略处理。安装器可能需要联网及系统管理员权限。
+| 设备 | 文件 | 用途 |
+| --- | --- | --- |
+| 电脑 | [Codex-Pocket-Bridge.zip](https://github.com/yunqing-yuan/codex-pocket/releases/download/v1.3.2-bridge.1/Codex-Pocket-Bridge.zip) | 解压后运行连接向导和后台电脑桥 |
+| 电脑 | [tailscale-setup-1.102.4.exe](https://github.com/yunqing-yuan/codex-pocket/releases/download/v1.3.2/tailscale-setup-1.102.4.exe) | 安装 Windows Tailscale |
+| 手机 | [Codex-Pocket.apk](https://github.com/yunqing-yuan/codex-pocket/releases/download/v1.3.2-bridge.1/Codex-Pocket.apk) | 手机聊天 App；已安装 1.3.2 的无需重装 |
+| 手机 | [tailscale-android-universal-1.102.4.apk](https://github.com/yunqing-yuan/codex-pocket/releases/download/v1.3.2/tailscale-android-universal-1.102.4.apk) | 安装 Android Tailscale |
 
-电脑仍需开机、登录并保持唤醒；可以锁屏。没有实现远程开机、绕过 Windows 登录或手机直接运行完整 Codex 引擎。
+上述 Tailscale 文件为用户提供的第三方安装包镜像；也可使用 [Tailscale 官方下载](https://tailscale.com/download)。Tailscale 文件校验值见 [Tailscale-SHA256SUMS.txt](https://github.com/yunqing-yuan/codex-pocket/releases/download/v1.3.2/Tailscale-SHA256SUMS.txt)。
 
-## 连接不通
+已有电脑桥：将新版 ZIP 完整解压，再覆盖原桥文件夹里的同名程序文件。保留原 `runtime` 文件夹，现有配对、附件和工作文件都在那里。不要在压缩包内直接双击脚本。
 
-- 先确认手机与电脑的 Tailscale 均为已连接，属于同一私人网络。
-- 地址填写向导显示的 Tailscale 地址，而非原 Wi-Fi 地址。
-- 向导成功表示**电脑侧配置完成**，不表示已经验证手机或校园网的端到端链路。
-- Windows 显式阻止规则优先于允许规则；第三方防火墙或组织策略需单独处理。
-- 管理员 PowerShell 可执行 `tailscale status` 查看设备状态、`tailscale netcheck` 查看直连/中继网络条件。分享输出前先移除账号、IP、设备名。
-- 更换电脑的 Tailscale 账号、地址或 Node.js 安装路径后，重新运行向导。
+## 第一步：电脑完成「这台设备」的授权
 
-## 撤销与隐私
+1. 安装 Windows Tailscale。已安装的直接从开始菜单打开。
+2. 点击任务栏右下角的向上箭头，找到 Tailscale 图标。点击 **Log in / 登录**。
+3. 在打开的浏览器页选择账号。**必须使用与你手机相同的 Tailscale 账号／私人网络**。
+4. 如果网页询问是否连接这台设备，点击 **Connect / 连接** 或相应的确认按钮，直到显示设备连接成功。只进入 Machines 列表不算完成这台电脑的认证。
+5. 回到右下角 Tailscale 图标，确认是 **Connected / 已连接**。如果看到 **Connect / 连接**，点它；如果仍显示 **Log in / 登录**，认证尚未完成。
 
-双击 `Remove-Remote.cmd` 并允许权限提示，只移除本向导创建的 `CodexPocket-Tailscale-TCP-15731` 防火墙规则；不会删除账号、停止 VPN、影响其他程序或移除后台启动项。
+公司或学校管理的账号可能需要管理员批准设备。此时先完成审批，不要删除设备或反复创建账号。
 
-其他已有放行规则仍可能允许连接。需要立即停止异地访问，应在 Tailscale 断开电脑或撤销对应设备；需要撤销 Pocket 手机凭据，按 [隐私说明](../PRIVACY.md) 更换桥令牌。`Disable-Background.cmd` 只撤销桥的自动启动。
+## 第二步：手机打开 VPN 连接开关
 
-Tailscale 是外部服务，登录身份、设备和网络连接元数据由其按自身政策处理。它提供的设备链路为加密隧道，Pocket 仍使用桥访问令牌。不要分享自己的账号、设备授权链接、配对码或 `runtime/`。
+1. 打开 **Tailscale App**，登录与电脑相同的账号／私人网络。
+2. 打开 Tailscale 连接开关。
+3. Android 弹出「连接请求 / VPN」时点允许或确定。
+4. 确认 Tailscale 页面显示 **Connected / 已连接**，通常状态栏也会显示 VPN 图标。
+5. 在设备列表查看电脑是否在线。首次排查时让手机 Tailscale 保持前台，避免被省电机制暂停。
 
-## 官方参考
+Android 通常只能同时使用一个 VPN。如果其他代理或加速器正在占用 VPN，请先停止，再连接 Tailscale。不要把 Pocket 排除在 Tailscale 的应用路由之外。
 
-- [Windows 安装](https://tailscale.com/docs/install/windows)
-- [连接类型与中继](https://tailscale.com/docs/reference/connection-types)
-- [防火墙端口](https://tailscale.com/docs/reference/faq/firewall-ports)
-- [其他 VPN 的兼容限制](https://tailscale.com/docs/reference/faq/other-vpns)
-- [tailscale up](https://tailscale.com/docs/reference/tailscale-cli/up)
+## 第三步：运行电脑桥配置向导
 
-交付检查只覆盖脚本语法、包内容和隐私扫描；尚未在用户校园网与两部跨网设备上完成验证。
+电脑双击解压目录里的 **`Setup-Remote.cmd`**。窗口应依次显示：
+
+```text
+1/4 检查 Tailscale
+2/4 连接私人网络
+3/4 启动后台电脑桥
+4/4 配置仅限 Tailscale 的访问规则
+```
+
+- 停在第 2 步时，看窗口显示的实际状态，按下面的排障表处理。登录完成后会自动继续；若窗口已在等输入，按一次 Enter。
+- 第 4 步 Windows 可能弹出「是否允许此应用对设备进行更改」。这是创建专用防火墙规则，点 **是**。取消时向导会报告配置未完成。
+- 成功后窗口会显示 **电脑端准备完成**、一个以 `http://100.` 开头且以 `:15731` 结尾的地址，以及六位配对码，同时打开电脑本机配对页。
+- 地址选择框应选中标有 **VPN 地址** 的那一项。
+
+向导只给真实电脑桥的 Node 程序添加一条入站允许规则：TCP 15731、本机 Tailscale 网卡与地址、Tailscale 来源网段。不会关闭整个防火墙，不会设置公网端口映射，也不会修改出口节点或已有路由。
+
+## 第四步：Pocket 填写电脑的地址
+
+1. 手机打开 **Codex Pocket**。
+2. 点左上角菜单 → 底部 **设置与配对**。
+3. 在「电脑地址」填写向导显示的完整地址，格式是 **`http://100.x.x.x:15731`**。
+4. 在「6 位配对码」填写电脑配对页当前显示的六位数字，点 **连接电脑**。
+5. 看到「已连接」后，打开一条对话查看历史。
+
+这里必须填写**电脑的 Tailscale 地址**，不能填手机的地址、`127.0.0.1`、网页管理后台地址或端口 `15732`。旧 Wi-Fi 地址在异地通常不可用，改用 Tailscale 地址即可。
+
+同一电脑只是更改连接地址时，现有访问令牌可继续使用，无需先点清除配对；填写六位码也可以重新验证。不要卸载 Pocket。配对码过期只影响首次配对，不影响已经连接过的手机。
+
+## 第五步：确认离开 Wi-Fi 也能用
+
+1. 保持电脑联网。
+2. 手机关闭 Wi-Fi，打开移动数据，确认手机 Tailscale 仍为已连接。
+3. 回到 Pocket，等待它自动重连，点左侧历史刷新或打开对话确认同步。
+4. 需要验证模型也可用时，自行发送一句消息；若出现等待时长，说明还需等待模型服务返回，不能仅凭等待时间判断 VPN 失败。
+
+电脑向导完成，表示电脑侧设置完成；手机实际在移动数据／校园网下同步成功，才表示这条跨网络链路可用。
+
+本次修复后，已在 Windows 电脑完成第 3、4 步并检查专用访问规则，用户确认手机切到移动数据后可同步。此结果不代表已覆盖所有手机或校园网。
+
+## 以后每天怎么用
+
+电脑首次双击一次 **`Enable-Background.cmd`**，以后登录 Windows 后会自动启动电脑桥和守护。电脑需开机、已经登录、保持唤醒，可以锁屏；重启后尚未登录 Windows 时，当前用户启动项还没有启动。
+
+两端 Tailscale 保持在线，手机直接打开 Pocket 即可，无需每天重新配对或打开电脑 Codex 窗口。Android 可按需要允许 Tailscale 后台运行；若希望系统自动保持 VPN，可在手机系统 VPN 设置中寻找「始终开启 VPN」，各品牌入口不同。此设置会占用手机的 VPN。
+
+## 常见状态与处理
+
+| 提示或现象 | 含义 | 应该做什么 |
+| --- | --- | --- |
+| `NeedsLogin` | 电脑客户端没有完成认证 | 从电脑托盘点 Log in，完成这台设备的授权，然后回向导继续 |
+| `NeedsMachineAuth` | 等待设备审批 | 在 Tailscale 管理页面批准设备，或联系该网络的管理员 |
+| `Stopped` | 已有账号，但连接已停用 | 电脑托盘点击 Connect；手机也检查连接开关 |
+| `Starting` | 正在建立连接 | 先等待；长时间不变时检查本机网络和客户端提示 |
+| `Running` 但本机离线 | 已启用连接，但控制连接尚未恢复 | 检查电脑联网、校园网认证、客户端 Health 提示 |
+| 网页有两台设备，Last seen 是过去时间 | 登记设备不等于实时在线 | 分别检查电脑托盘和手机 App 的 Connected 状态 |
+| 旧版出现 `timeout waiting ... Running state` | 60 秒内没有连接完成，向导已退出 | 完成设备授权后重新运行新版 Setup-Remote.cmd；不是按「任意键」就会进入第 3 步 |
+| 手机 Tailscale 登录了但仍离线 | VPN 开关未开、权限未允许或被别的 VPN 替换 | 开启连接并允许 Android VPN 提示，停用冲突的 VPN |
+| 提示 JSON 对象无效、应为冒号或右大括号 | 旧脚本在 PowerShell 5.1 中错误解码中文账号名称 | 覆盖新版电脑桥，重新运行向导，无需改账号名称 |
+| 第 4 步失败 | 权限被取消、端口未监听、规则被策略阻止等 | 重跑向导并允许权限；查看实际错误，不要关闭整个防火墙 |
+| 两端在线，Pocket 仍连不上 | 地址／端口、入站阻止、VPN 访问策略等问题 | 用电脑的 `100.x` 地址与 15731；检查 Tailscale 的入站连接设置、管理员访问策略及 Windows 显式阻止规则 |
+
+只想查看电脑状态，可在桥文件夹打开 PowerShell 执行：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Remote-Pocket.ps1 -StatusOnly
+```
+
+此命令只显示本机状态和地址，不会登录、修改规则或生成配对码。分享输出或截图前遮住账号、设备信息和认证链接。
+
+## 校园网与撤销
+
+先完成校园网自身认证。Tailscale 通常可以使用直连或 DERP 中继，但学校若阻止其登录、控制服务或 VPN，不保证可用。自定义 Headscale、地址池、组织策略和第三方防火墙可能需要单独配置。
+
+`Remove-Remote.cmd` 仅移除 Pocket 创建的 Tailscale 防火墙规则，不退出 Tailscale 账号。`Disable-Background.cmd` 移除电脑桥启动项并停止守护检查，不中止正在运行的桥或任务。撤销这些设置不等于撤销已配对的手机凭据，参见 [隐私说明](../PRIVACY.md)。
+
+参考：[Windows 安装](https://tailscale.com/docs/install/windows)、[连接类型](https://tailscale.com/docs/reference/connection-types)、[防火墙端口](https://tailscale.com/docs/reference/faq/firewall-ports)、[其他 VPN](https://tailscale.com/docs/reference/faq/other-vpns)、[tailscale up](https://tailscale.com/docs/reference/tailscale-cli/up)。
