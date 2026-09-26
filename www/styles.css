@@ -54,6 +54,14 @@ input,textarea{outline:none;min-width:0}
 .approval-badge b{position:absolute;right:0;top:2px;min-width:14px;border-radius:7px;background:var(--accent);color:var(--accent-text);font-size:9px}
 .main-content{flex:1;min-height:0;min-width:0;display:flex;overflow:hidden;position:relative}
 .thread-view{width:100%;max-width:860px;margin:0 auto;min-height:0;display:flex;flex-direction:column;position:relative}
+.task-status{flex-shrink:0;display:flex;align-items:center;gap:10px;margin:0 16px 4px;padding:12px 14px;border:1px solid var(--line);border-radius:16px;background:var(--panel);font-size:12px}
+.task-status>div{flex:1;min-width:0}.task-status strong{display:block;font-size:12px;font-weight:550;line-height:1.5}
+.task-status strong b{font-weight:inherit}
+.task-status strong span{color:var(--muted);font-size:11px;font-variant-numeric:tabular-nums;white-space:nowrap}
+.task-status p{margin:4px 0 0;color:var(--muted);font-size:11px;line-height:1.5}
+.task-status button{display:flex;gap:5px;align-items:center;justify-content:center;flex-shrink:0;min-height:44px;padding:8px 10px;border-radius:12px;background:var(--soft);color:var(--accent);font-size:11px;white-space:nowrap}
+.task-status button .icon{width:14px;height:14px}
+@media(max-height:530px){.task-status{padding:6px 10px;margin-bottom:0}.task-status p{display:none}}
 .message-list{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;scrollbar-width:thin;scrollbar-color:var(--line) transparent;padding:14px 22px 24px;outline:none;scroll-padding:20px}
 .message-list.has-welcome{display:flex;flex-direction:column}
 .welcome{margin:auto;flex-shrink:0;width:100%;text-align:center;padding:36px 0 46px;animation:arrive .5s ease-out both}

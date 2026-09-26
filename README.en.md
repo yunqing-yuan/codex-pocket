@@ -61,7 +61,7 @@ The bridge stores its access token in `runtime/pairing.json` and attachments in 
 - Android 8 / API 26 minimum, with a working System WebView. No iOS package.
 - Windows is the supported distribution path. Full macOS/Linux workflows are unverified.
 - Development used Codex Windows `26.917.9434.0`. Same-thread sending uses an internal desktop IPC protocol that may change with desktop updates.
-- The `1.3.1` APK uses debug signing and is a preview, not a store release.
+- The `1.3.2` APK uses debug signing and is a preview, not a store release.
 - No claim of exhaustive device testing or an independent security audit. Cross-network device usage has not been comprehensively validated.
 - No built-in document parser, background push notifications, automatic public tunnel, or per-user access isolation.
 

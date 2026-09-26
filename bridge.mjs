@@ -108,6 +108,8 @@ class CodexBridge extends EventEmitter {
     this.approvals = new Map();
     this.ownedThreads = new Set();
     this.activeTurns = new Map();
+    this.execution = new Map();
+    this.releaseTimers = new Map();
     this.buffer = "";
     this.initialized = null;
     this.closed = false;
@@ -175,6 +177,7 @@ class CodexBridge extends EventEmitter {
   }
 
   handleServerMessage(message) {
+    const p = message.params || {}, id = String(p.threadId || p.thread?.id || '');
     if (message.method?.endsWith("requestApproval")) {
       const params = message.params || {};
       const key = String(params.approvalId || params.itemId || message.id);
@@ -196,15 +199,39 @@ class CodexBridge extends EventEmitter {
           String(threadId),
           params.turnId || params.turn?.id || null,
         );
+      if (threadId) this.execution.set(String(threadId), {
+        phase: 'waiting', startedAt: normalizeTimestamp(params.turn?.startedAt), updatedAt: Date.now(),
+      });
+    }
+    const progress = this.execution.get(id);
+    if (progress && this.activeTurns.has(id)) {
+      let phase;
+      if (message.method === 'error' && p.willRetry) phase = 'retrying';
+      else if (message.method?.endsWith('requestApproval')) phase = 'approval';
+      else if (message.method === 'item/agentMessage/delta') phase = 'generating';
+      else if (message.method?.startsWith('item/reasoning/')) phase = 'processing';
+      else if (message.method === 'item/started') {
+        phase = ['commandExecution', 'fileChange', 'mcpToolCall', 'dynamicToolCall'].includes(p.item?.type) ? 'tools'
+          : p.item?.type === 'reasoning' ? 'processing' : p.item?.type === 'agentMessage' ? 'generating' : null;
+      } else if (message.method === 'item/completed' && p.item?.type !== 'userMessage') phase = 'waiting';
+      if (phase && progress.phase !== 'stopping') {
+        progress.phase = phase; progress.updatedAt = Date.now();
+      }
     }
     if (message.method === "turn/completed") {
       const threadId = message.params?.threadId;
       if (threadId) {
         this.activeTurns.delete(String(threadId));
+        this.execution.delete(String(threadId));
         for (const [key, entry] of this.approvals)
           if (entry.params.threadId === threadId) this.approvals.delete(key);
-        if (this.ownedThreads.has(threadId)) this.withThread(threadId, () => this.releaseThread(threadId)).catch(() => {});
+        if (this.ownedThreads.has(threadId)) this.scheduleRelease(threadId);
       }
+    }
+    if (message.method === 'thread/closed' && id) {
+      this.activeTurns.delete(id); this.execution.delete(id); this.ownedThreads.delete(id);
+      for (const [key, entry] of this.approvals) if (entry.params.threadId === id) this.approvals.delete(key);
+      clearTimeout(this.releaseTimers.get(id)); this.releaseTimers.delete(id);
     }
     if (message.method)
       this.emit("event", message.method, message.params || {});
@@ -257,6 +284,19 @@ class CodexBridge extends EventEmitter {
     if (!this.ownedThreads.has(id) || this.activeTurns.has(id)) return;
     await this.rpc('thread/unsubscribe', { threadId: id });
     this.ownedThreads.delete(id);
+    clearTimeout(this.releaseTimers.get(id)); this.releaseTimers.delete(id);
+  }
+
+  scheduleRelease(id, delay = 0) {
+    if (this.closed || !this.ownedThreads.has(id) || this.activeTurns.has(id) || this.releaseTimers.has(id)) return;
+    const timer = setTimeout(() => {
+      this.releaseTimers.delete(id);
+      this.withThread(id, () => this.releaseThread(id)).catch(() => {
+        this.emit('event', 'thread.release.retrying', { threadId: id });
+        this.scheduleRelease(id, 3000);
+      });
+    }, delay);
+    timer.unref(); this.releaseTimers.set(id, timer);
   }
 
   async ensureInitialized() {
@@ -331,7 +371,7 @@ class CodexBridge extends EventEmitter {
       pid: this.child.pid,
       initialized: true,
       executable: basename(this.executable),
-      version: '1.3.1',
+      version: '1.3.2',
       sameThreadSending: true,
       backgroundExecution: true,
     };
@@ -349,7 +389,9 @@ class CodexBridge extends EventEmitter {
     });
     const rows = result?.data || result?.threads || [];
     return {
-      threads: rows.map((row) => normalizeThread({ ...row, archived: query.archived === 'true' || query.archived === '1' }, this.ownedThreads)),
+      threads: rows.map((row) => normalizeThread({ ...row,
+        ...(this.activeTurns.has(row.id) ? { status: 'active' } : {}),
+        archived: query.archived === 'true' || query.archived === '1' }, this.ownedThreads)),
       nextCursor: result?.nextCursor ?? null,
     };
   }
@@ -367,6 +409,7 @@ class CodexBridge extends EventEmitter {
     const items = [];
     const turnTimes = new Map();
     const turnErrors = [];
+    let latestTurn = null;
     let historyIncomplete = false;
     let turnCursor = null;
     try {
@@ -381,6 +424,7 @@ class CodexBridge extends EventEmitter {
           ? turnsPage.data
           : turnsPage?.data?.items || turnsPage?.items || [];
         for (const turn of turns) {
+          latestTurn = turn;
           if (turn.status === 'failed' && turn.error) turnErrors.push({ id: 'error-' + turn.id, role: 'assistant', text: '本次回复未完成：' + (turn.error.message || '模型返回错误，请重试'), time: normalizeTimestamp(turn.completedAt || turn.startedAt) });
           if (turn.id)
             turnTimes.set(
@@ -438,7 +482,7 @@ class CodexBridge extends EventEmitter {
       },
       this.ownedThreads,
     );
-    const live = this.desktop.owners.has(id) ? await this.desktop.waitState(id) : null;
+    const live = !this.ownedThreads.has(id) && this.desktop.owners.has(id) ? await this.desktop.waitState(id) : null;
     if (live) {
       thread.model = live.latestModel || thread.model;
       thread.reasoningEffort = live.latestThreadSettings?.effort ?? live.latestReasoningEffort ?? live.latestCollaborationMode?.settings?.reasoning_effort ?? thread.reasoningEffort;
@@ -446,7 +490,18 @@ class CodexBridge extends EventEmitter {
       thread.title = live.title || thread.title;
       thread.owner = 'desktop';
     }
-    return { ...thread, historyIncomplete, tools: mapped.tools };
+    const terminal = latestTurn && ['completed', 'failed', 'interrupted'].includes(latestTurn.status);
+    // Recover a missed completion notification only when persisted state names the same turn.
+    if (terminal && this.activeTurns.get(id) === latestTurn.id) {
+      this.activeTurns.delete(id); this.execution.delete(id); this.scheduleRelease(id);
+      thread.status = 'idle';
+    }
+    const execution = this.execution.get(id) || (latestTurn?.status === 'inProgress'
+      ? { phase: 'running', startedAt: normalizeTimestamp(latestTurn.startedAt), updatedAt: Date.now() } : null);
+    if (this.activeTurns.has(id)) { thread.owner = 'bridge'; thread.status = 'active'; }
+    return { ...thread, execution: execution ? { ...execution, elapsedMs: Math.max(0, Date.now() - execution.startedAt) } : null,
+      releasing: this.ownedThreads.has(id) && !this.activeTurns.has(id) && Boolean(terminal),
+      historyIncomplete, tools: mapped.tools };
   }
 
   async capabilities() {
@@ -589,14 +644,20 @@ class CodexBridge extends EventEmitter {
         throw error;
       }
       this.ownedThreads.add(id);
+      this.desktop.forget(id);
     }
     this.activeTurns.set(id, 'pending');
+    this.execution.set(id, { phase: 'starting', startedAt: Date.now(), updatedAt: Date.now() });
     try {
       const result = await this.rpc('turn/start', { threadId: id, input, ...modelOptions, ...(options.requestId ? { clientUserMessageId: options.requestId } : {}) });
       if (this.activeTurns.get(id) === 'pending') this.activeTurns.set(id, result?.turn?.id || 'pending');
       return { accepted: true, turnId: result?.turn?.id || null, threadId: id, transport: 'bridge' };
     } catch (error) {
-      if (error.code !== 'bridge_request_timeout') this.activeTurns.delete(id);
+      if (error.code !== 'bridge_request_timeout') {
+        this.activeTurns.delete(id); this.execution.delete(id);
+        // A new empty thread has no persisted rollout yet; keep its writer for retry.
+        if (raw?.path && existsSync(raw.path)) this.scheduleRelease(id);
+      }
       throw error;
     }
   }
@@ -622,9 +683,14 @@ class CodexBridge extends EventEmitter {
       return this.desktop.call(id, 'thread-follower-interrupt-turn', { mode: 'user-stop', expectedTurnId: null });
     }
     if (turnId === 'pending') throw Object.assign(new Error('任务仍在确认中，请稍后同步再停止'), { statusCode: 409 });
+    const progress = this.execution.get(id);
+    if (progress) { progress.phase = 'stopping'; progress.updatedAt = Date.now(); }
+    let result;
+    try { result = await this.rpc("turn/interrupt", { threadId: id, turnId }); }
+    catch (error) { if (progress && this.activeTurns.has(id)) progress.phase = 'running'; throw error; }
     return {
       ok: true,
-      ...(await this.rpc("turn/interrupt", { threadId: id, turnId })),
+      ...result,
     };
   }
 
@@ -665,6 +731,8 @@ class CodexBridge extends EventEmitter {
   close() {
     if (this.closed) return;
     this.closed = true;
+    for (const timer of this.releaseTimers.values()) clearTimeout(timer);
+    this.releaseTimers.clear();
     this.desktop.close();
     for (const entry of this.approvals.values()) {
       try {

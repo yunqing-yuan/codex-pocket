@@ -315,6 +315,8 @@ function normalizeThread(raw = {}) {
     forkedFromId: raw.forkedFromId || null,
     archived: Boolean(raw.archived),
     historyIncomplete: Boolean(raw.historyIncomplete),
+    execution: raw.execution ? { ...raw.execution, receivedAt: Date.now() } : null,
+    releasing: Boolean(raw.releasing),
     messages,
   };
 }
@@ -542,7 +544,7 @@ function renderWelcome() {
   return `<div class="welcome"><div class="scene" aria-hidden="true"><span class="scene-ring"></span><span class="scene-sun"></span><span class="scene-mountain mountain-back"></span><span class="scene-mountain mountain-front"></span><span class="scene-glyph">${icon(theme === 'dao' ? 'leaf' : theme === 'stars' ? 'sparkle' : 'bolt')}</span><span class="scene-star star-one"></span><span class="scene-star star-two"></span></div><span class="welcome-eyebrow">CODEX POCKET</span><h1>${t.title}</h1><p>${t.subtitle}</p><div class="suggestions"><button data-prompt="帮我梳理一下这个想法：">梳理一个想法 ${icon('chevron')}</button><button data-prompt="帮我看一段代码：">一起看看代码 ${icon('chevron')}</button></div>${!state.config.baseUrl && state.config.mode !== 'demo' ? '<button class="connect-hint" data-screen="settings">连接电脑，开启对话 →</button>' : ''}</div>`;
 }
 function renderThread() {
-  return `<section class="thread-view" aria-label="对话"><div class="message-list" tabindex="0" aria-label="聊天记录"></div><button class="jump-bottom" aria-label="回到最新消息" hidden>${icon('down')}</button><form class="composer" id="composer-form"><div class="context-row"></div><div class="send-error" role="status" hidden></div><div class="composer-line"><div class="attachment-tray" hidden></div><textarea id="composer-input" rows="1" aria-label="消息" placeholder="写下你的想法…" enterkeyhint="enter"></textarea><div class="composer-tools"><button class="attach-button icon-button" type="button" data-attach aria-label="添加图片或文件">${icon('plus')}</button><button class="model-chip" type="button" data-model-picker aria-label="选择模型和推理强度"></button><span class="composer-caption"></span><button class="send-button" type="submit" aria-label="发送消息">${icon('arrow')}</button></div></div><span class="composer-foot">与你的灵感，保持连接</span></form><input id="attachment-input" type="file" multiple hidden accept="*/*" /></section>`;
+  return `<section class="thread-view" aria-label="对话"><div class="message-list" tabindex="0" aria-label="聊天记录"></div><section class="task-status" aria-label="任务状态" hidden></section><button class="jump-bottom" aria-label="回到最新消息" hidden>${icon('down')}</button><form class="composer" id="composer-form"><div class="context-row"></div><div class="send-error" role="status" hidden></div><div class="composer-line"><div class="attachment-tray" hidden></div><textarea id="composer-input" rows="1" aria-label="消息" placeholder="写下你的想法…" enterkeyhint="enter"></textarea><div class="composer-tools"><button class="attach-button icon-button" type="button" data-attach aria-label="添加图片或文件">${icon('plus')}</button><button class="model-chip" type="button" data-model-picker aria-label="选择模型和推理强度"></button><span class="composer-caption"></span><button class="send-button" type="submit" aria-label="发送消息">${icon('arrow')}</button></div></div><span class="composer-foot">与你的灵感，保持连接</span></form><input id="attachment-input" type="file" multiple hidden accept="*/*" /></section>`;
 }
 function historyGroup(time) {
   const start = new Date(); start.setHours(0, 0, 0, 0);
@@ -578,6 +580,35 @@ function currentOptions() {
   const catalog = state.capabilities?.models.find(m => m.id === model);
   const effort = choice.effort || (!choice.model || choice.model === thread?.model ? thread?.reasoningEffort : null) || (model === defaults.model ? defaults.effort : null) || catalog?.defaultEffort;
   return { model, effort };
+}
+function renderTaskStatus() {
+  const box = document.querySelector('.task-status'), thread = selectedThread();
+  if (!box) return;
+  const working = state.config.mode !== 'demo' && thread && ['active', 'inProgress', 'running', 'busy'].includes(thread.status);
+  const releasing = state.config.mode !== 'demo' && thread?.releasing;
+  box.hidden = !working && !releasing;
+  if (box.hidden) return;
+  const online = state.connection === 'connected', progress = thread.execution;
+  const elapsed = progress ? Math.max(0, Math.floor(((progress.elapsedMs || 0) + (online ? Date.now() - (progress.receivedAt || Date.now()) : 0)) / 1000)) : 0;
+  const duration = progress ? `${Math.floor(elapsed / 60)}分${String(elapsed % 60).padStart(2, '0')}秒` : '';
+  const phase = progress?.phase || 'running';
+  const labels = { starting: '电脑正在接收任务', waiting: '等待模型继续回复', retrying: '连接模型服务中 · 正在重试', processing: '模型正在处理', generating: '正在接收回复', tools: '电脑正在执行任务', approval: '等待你的审批', stopping: '正在停止本轮任务', running: 'Codex 正在处理' };
+  const title = !online ? '连接已中断 · 任务状态待同步' : releasing ? '本轮已结束 · 正在释放会话' : labels[phase] || labels.running;
+  let detail = !online ? '记录已保留，连接恢复后会更新进度。'
+    : releasing ? '释放完成后，在电脑对话中点击「重试」即可继续。'
+    : phase === 'stopping' ? '正在等待电脑确认停止，完成后会自动释放会话。'
+    : phase === 'approval' ? '请查看上方审批卡片。'
+    : phase === 'retrying' ? '模型连接暂时出错，电脑仍在线。可以继续等待或停止本轮。'
+    : elapsed >= 60 ? '本轮等待较久，可停止后重试。停止或完成后，电脑端可继续同一对话。'
+    : thread.owner === 'bridge' ? '任务由电脑后台处理，锁屏不影响运行。' : '消息已交给电脑，正在等待处理。';
+  if (!box.firstElementChild) box.innerHTML = `<div><strong><b data-task-title></b> <span data-task-time></span></strong><p></p></div><button type="button" data-interrupt>${icon('stop')}停止本轮</button>`;
+  box.querySelector('[data-task-title]').textContent = title;
+  box.querySelector('[data-task-time]').textContent = duration;
+  box.querySelector('p').textContent = detail;
+  const stop = box.querySelector('[data-interrupt]');
+  stop.dataset.interrupt = thread.id;
+  stop.hidden = !working;
+  stop.disabled = !online || state.busy || phase === 'stopping';
 }
 function renderComposerExtras(main) {
   const thread = selectedThread(), options = currentOptions(), files = currentFiles();
@@ -701,7 +732,7 @@ async function uploadFiles(files, client) {
   return files.map(f => f.uploadId);
 }
 function renderSettings() {
-  return `<section class="settings-page"><div class="settings-heading"><span class="eyebrow">MAKE IT YOURS</span><h1>留一方，自己的天地。</h1><p>挑一种心境，继续你的灵感。</p></div><section class="settings-section"><h2>外观主题</h2><div class="theme-grid">${Object.entries(themes).map(([id, t]) => `<button class="theme-card" data-theme-choice="${id}" aria-pressed="${theme === id}"><span class="theme-swatch swatch-${id}"><i></i><b>${icon(id === 'dao' ? 'leaf' : id === 'stars' ? 'sparkle' : 'message')}</b></span><span class="theme-name">${t.name}<span class="theme-check">${icon('check')}</span></span><small>${t.label}</small></button>`).join('')}</div></section><section class="settings-section"><h2>连接电脑 <span class="settings-status ${connectionClass()}">${connectionLabel()}</span></h2><p class="section-note">沿用 cc-switch 配置。电脑与手机连接同一 Wi-Fi，或通过自己的 VPN 连接。</p>${renderSettingsForm()}${state.config.baseUrl ? '<button class="button subtle disconnect" data-clear>清除本机配对与离线记录</button>' : '<button class="button subtle demo-link" data-demo>先体验演示对话</button>'}</section><section class="settings-section"><h2>外出连接</h2><p class="section-note">可通过 Tailscale 等私人 VPN 跨网络使用。电脑与手机加入同一 VPN 后，把电脑地址改为 VPN 分配的 IP，保留端口 15731 和配对信息。无需登录 OpenAI 账户；VPN 需自行安装与连接。电脑需要保持开机并运行电脑桥。</p></section><section class="settings-section about"><h2>关于 Codex Pocket <small>1.3.1</small></h2><p>模型、推理强度与项目从电脑读取。手机可独立发送任务和审批，沿用电脑配置；已有桌面会话会交给当前窗口处理。电脑桥可在后台独立运行，无需打开 Codex 窗口；也不会自动弹出电脑会话。</p></section></section>`;
+  return `<section class="settings-page"><div class="settings-heading"><span class="eyebrow">MAKE IT YOURS</span><h1>留一方，自己的天地。</h1><p>挑一种心境，继续你的灵感。</p></div><section class="settings-section"><h2>外观主题</h2><div class="theme-grid">${Object.entries(themes).map(([id, t]) => `<button class="theme-card" data-theme-choice="${id}" aria-pressed="${theme === id}"><span class="theme-swatch swatch-${id}"><i></i><b>${icon(id === 'dao' ? 'leaf' : id === 'stars' ? 'sparkle' : 'message')}</b></span><span class="theme-name">${t.name}<span class="theme-check">${icon('check')}</span></span><small>${t.label}</small></button>`).join('')}</div></section><section class="settings-section"><h2>连接电脑 <span class="settings-status ${connectionClass()}">${connectionLabel()}</span></h2><p class="section-note">沿用 cc-switch 配置。电脑与手机连接同一 Wi-Fi，或通过自己的 VPN 连接。</p>${renderSettingsForm()}${state.config.baseUrl ? '<button class="button subtle disconnect" data-clear>清除本机配对与离线记录</button>' : '<button class="button subtle demo-link" data-demo>先体验演示对话</button>'}</section><section class="settings-section"><h2>外出连接</h2><p class="section-note">可通过 Tailscale 等私人 VPN 跨网络使用。电脑与手机加入同一 VPN 后，把电脑地址改为 VPN 分配的 IP，保留端口 15731 和配对信息。无需登录 OpenAI 账户；VPN 需自行安装与连接。电脑需要保持开机并运行电脑桥。</p></section><section class="settings-section about"><h2>关于 Codex Pocket <small>1.3.2</small></h2><p>模型、推理强度与项目从电脑读取。手机可独立发送任务和审批，沿用电脑配置；已有桌面会话会交给当前窗口处理。电脑桥可在后台独立运行，无需打开 Codex 窗口；也不会自动弹出电脑会话。</p></section></section>`;
 }
 let renderedThreadId = null, pageKey = '', messageMarkup = '', historyMarkup = '';
 let followMessages = true, composing = false, lastNativeAppearance = '';
@@ -766,6 +797,7 @@ function render() {
     const working = state.config.mode !== 'demo' && thread && ['active', 'inProgress', 'running', 'busy'].includes(thread.status);
     caption.innerHTML = working && ['bridge', 'desktop'].includes(thread.owner) ? `<button type="button" class="stop-button" data-interrupt="${escapeHtml(thread.id)}" aria-label="停止生成">${icon('stop')}</button>` : '';
     renderComposerExtras(main);
+    renderTaskStatus();
     resizeComposer(input);
     list.scrollTop = follow ? list.scrollHeight : oldTop;
     followMessages = follow;
@@ -945,6 +977,7 @@ async function sendMessage(form) {
       const t = state.threads.find(t => t.id === id);
       if (t) {
         t.status = 'active'; t.owner = result.transport === 'bridge' ? 'bridge' : 'desktop'; if (options.model) t.model = options.model; if (options.effort) t.reasoningEffort = options.effort;
+        t.execution = { phase: 'waiting', elapsedMs: 0, receivedAt: Date.now() };
         // Preserve acknowledged messages even when the next read loses its connection.
         t.messages.push(normalizeMessage({id:'sent-'+retry.requestId,role:'user',text:text+(files.length?'\n附件：'+files.map(f=>f.name).join('、'):''),time:Date.now()}));
       }
@@ -983,7 +1016,8 @@ async function interrupt(id) {
   state.busy = true;
   try {
     await adapter().interrupt(id);
-    setToast("已请求中断");
+    if (selectedThread()?.id === id && selectedThread().execution) selectedThread().execution.phase = 'stopping';
+    setToast("停止请求已送达，确认结束后会释放会话");
   } catch (e) {
     setToast(`中断失败：${e.message}`);
   } finally {
@@ -1263,6 +1297,7 @@ async function boot() {
   setInterval(() => {
     if (!document.hidden && Date.now()>=state.nextPoll) syncThreads({ quiet: true });
   }, 3000);
+  setInterval(() => { if (!document.hidden) renderTaskStatus(); }, 1000);
   reconnect();
 }
 boot();
